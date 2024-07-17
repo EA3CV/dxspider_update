@@ -7,7 +7,7 @@ It is important that you tell the script the path where DXSpider is installed.
 
 Download script:
 
-	wget https://github.com/glaukos78/dxspider_installation_v2/archive/refs/heads/devel.zip -O update_dxspider.zip
+	wget https://github.com/EA3CV/dxspider_update/archive/refs/heads/main.zip -O update_dxspider.zip
 
 Must be run as root user.
 
@@ -15,7 +15,7 @@ Uncompress & change permissions
 
     unzip update_dxspider.zip
 
-    cd dxspider_installation_v2-devel/
+    cd dxspider_update-main
 
     chmod a+x update_dxspider.sh
 
