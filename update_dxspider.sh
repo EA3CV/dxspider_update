@@ -100,6 +100,8 @@ check_distro() {
       				install_package_debian
 	  		elif [ "${distroname}" == "Ubuntu 22.04.4 LTS" ]; then
       				install_package_debian
+	  		elif [ "${distroname}" == "Ubuntu 22.04.5 LTS" ]; then
+      				install_package_debian
 			elif [ "${distroname}" == "Fedora Linux 39 (Server Edition)" ]; then
       				install_epel_8
       				install_package_CentOS_8
