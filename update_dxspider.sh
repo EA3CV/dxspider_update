@@ -511,7 +511,7 @@ update_spider()
 	# Update to MOJO version
 	# Create symbolic links
 	cd ${DXSPATH}
-	ln -s ${DXSPATH} /spider
+	# ln -s ${DXSPATH} /spider
 
 	# Download Application dxspider with git
 	echo -e "Now starting to download application DxSpider"
