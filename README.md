@@ -44,6 +44,7 @@ Script has been tested on the following Operating Systems (Linux Distributions)
 	Ubuntu 22.04.2 LTSUbuntu 22.04.3 LTS
 	Ubuntu 22.04.4 LTS
  	Ubuntu 22.04.5 LTS
+   	Ubuntu 22.04.6 LTS
 	Rocky Linux 8.5 (Green Obsidian)
 	
 Remember that it is only for updating, for a new installation look at the development of Yiannis Panagou, SV5FRI at:
