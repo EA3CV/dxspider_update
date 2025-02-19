@@ -35,16 +35,17 @@ Script has been tested on the following Operating Systems (Linux Distributions)
 	Fedora Linux 39 (Server Edition)
 	Fedora Linux 39 (Workstation Edition)
 	Linux Mint 21.1
+ 	Linux Mint 21.3
 	Raspbian GNU/Linux 9 (stretch) 
 	Raspbian GNU/Linux 10 (buster)
 	Raspbian GNU/Linux 11 (bullseye)
 	Raspbian GNU/Linux 12 (bookworm)
+	Ubuntu 20.04.6 LTS
 	Ubuntu 22.04 LTS
 	Ubuntu 22.04.1 LTS
 	Ubuntu 22.04.2 LTSUbuntu 22.04.3 LTS
 	Ubuntu 22.04.4 LTS
  	Ubuntu 22.04.5 LTS
-   	Ubuntu 22.04.6 LTS
 	Rocky Linux 8.5 (Green Obsidian)
 	
 Remember that it is only for updating, for a new installation look at the development of Yiannis Panagou, SV5FRI at:
