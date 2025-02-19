@@ -114,6 +114,8 @@ check_distro() {
                                 install_package_debian
 			elif [ "${distroname}" == "Linux Mint 21.1" ]; then
                                 install_package_debian
+			elif [ "${distroname}" == "Linux Mint 21.3" ]; then
+                                install_package_debian
                 else
                         echo -e " "
                         echo -e "==============================================================="
