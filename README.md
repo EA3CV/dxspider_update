@@ -43,7 +43,8 @@ Script has been tested on the following Operating Systems (Linux Distributions)
 	Ubuntu 20.04.6 LTS
 	Ubuntu 22.04 LTS
 	Ubuntu 22.04.1 LTS
-	Ubuntu 22.04.2 LTSUbuntu 22.04.3 LTS
+	Ubuntu 22.04.2 LTS
+ 	Ubuntu 22.04.3 LTS
 	Ubuntu 22.04.4 LTS
  	Ubuntu 22.04.5 LTS
 	Rocky Linux 8.5 (Green Obsidian)
