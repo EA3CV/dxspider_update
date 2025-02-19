@@ -90,7 +90,9 @@ check_distro() {
                                 install_package_debian
 			elif [ "${distroname}" == "Debian GNU/Linux 12 (bookworm)" ]; then
                                 install_package_debian
-			elif [ "${distroname}" == "Ubuntu 22.04 LTS" ]; then
+	  		elif [ "${distroname}" == "Ubuntu 20.04.6 LTS" ]; then
+      				install_package_debian
+   			elif [ "${distroname}" == "Ubuntu 22.04 LTS" ]; then
     				install_package_debian
 			elif [ "${distroname}" == "Ubuntu 22.04.1 LTS" ]; then
       				install_package_debian
@@ -101,8 +103,6 @@ check_distro() {
 	  		elif [ "${distroname}" == "Ubuntu 22.04.4 LTS" ]; then
       				install_package_debian
 	  		elif [ "${distroname}" == "Ubuntu 22.04.5 LTS" ]; then
-      				install_package_debian
-	  		elif [ "${distroname}" == "Ubuntu 22.04.6 LTS" ]; then
       				install_package_debian
    			elif [ "${distroname}" == "Fedora Linux 39 (Server Edition)" ]; then
       				install_epel_8
