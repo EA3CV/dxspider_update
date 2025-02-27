@@ -7,8 +7,8 @@
 # Create By Kin, EA3CV and based on the code of Yiannis Panagou, SV5FRI
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.4
-# Date 20231116
+# Version 0.5
+# Date 20250227
 #
 
 
@@ -150,8 +150,8 @@ config_app()
 	su - $OWNER -c "cd ${DXSPATH} ; git reset --hard"
 	su - $OWNER -c "cd ${DXSPATH} ; git pull"
 	su - $OWNER -c "cd ${DXSPATH} ; git checkout --track -b mojo origin/mojo"
-	ln -s ${DXSPATH}/perl/console.pl /usr/local/bin/dx
-	ln -s ${DXSPATH}/perl/*dbg /usr/local/bin
+	#ln -s ${DXSPATH}/perl/console.pl /usr/local/bin/dx
+	#ln -s ${DXSPATH}/perl/*dbg /usr/local/bin
 
 	chown -R $OWNER.$GROUP spider
 	find ./ -type d -exec chmod 2775 {} \;
