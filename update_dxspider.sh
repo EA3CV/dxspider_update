@@ -74,6 +74,8 @@ check_distro() {
                         elif [ "${distroname}" == "Rocky Linux 8.5 (Green Obsidian)" ]; then
                                 install_epel_8
                                 install_package_CentOS_8
+                        elif [ "${distroname}" == "Raspbian GNU/Linux 8 (jessie)" ]; then
+                                install_package_debian
                         elif [ "${distroname}" == "Raspbian GNU/Linux 9 (stretch)" ]; then
                                 install_package_debian
                         elif [ "${distroname}" == "Debian GNU/Linux 9 (stretch)" ]; then
