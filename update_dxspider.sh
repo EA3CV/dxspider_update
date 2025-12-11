@@ -86,11 +86,15 @@ check_distro() {
                                 install_package_debian
                         elif [ "${distroname}" == "Raspbian GNU/Linux 11 (bullseye)" ]; then
                                 install_package_debian
+                        elif [ "${distroname}" == "Raspbian GNU/Linux 13 (trixie)" ]; then
+                                install_package_debian
 			elif [ "${distroname}" == "Raspbian GNU/Linux 12 (bookworm)" ]; then
                                 install_package_debian
                         elif [ "${distroname}" == "Debian GNU/Linux 11 (bullseye)" ]; then
                                 install_package_debian
 			elif [ "${distroname}" == "Debian GNU/Linux 12 (bookworm)" ]; then
+                                install_package_debian
+            elif [ "${distroname}" == "Debian GNU/Linux 13 (trixie)" ]; then
                                 install_package_debian
 	  		elif [ "${distroname}" == "Ubuntu 20.04.6 LTS" ]; then
       				install_package_debian
