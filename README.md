@@ -1,3 +1,15 @@
+##############
+IMPORTANT NOTE
+##############
+
+There are two scripts to update DXSpider:
+update_dxspider.sh will only work when the official DXSpider repository is back online.
+update_dxspider_alternative.sh was created to update your DXSpider while the official site is down.
+
+#########################
+To use update_dxspider.sh
+#########################
+
 This script will allow you to update your DXSpider node to the latest build of the MOJO version.
 
 This job is based on the great development of the DXSpider installation script by Yiannis Panagou, SV5FRI.
@@ -51,7 +63,32 @@ Script has been tested on the following Operating Systems (Linux Distributions)
  	Ubuntu 22.04.5 LTS
    	Ubuntu 24.04.2 LTS
 	Rocky Linux 8.5 (Green Obsidian)
-	
+
+
+#####################################
+To use update_dxspider_alternative.sh
+#####################################
+
+Download script:
+
+	wget https://github.com/EA3CV/dxspider_update/archive/refs/heads/main.zip -O update_dxspider_alternative.zip
+
+Must be run as root user.
+
+Uncompress & change permissions
+
+    unzip update_dxspider_alternative.zip
+
+    cd dxspider_update-main
+
+    chmod a+x update_dxspider_alternative.sh
+
+Run script and follow the messages.
+
+    ./update_dxspider_alternative.sh
+
+
+
 Remember that it is only for updating, for a new installation look at the development of Yiannis Panagou, SV5FRI at:
 
 	https://github.com/glaukos78/dxspider_installation_v2
