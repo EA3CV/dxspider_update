@@ -65,9 +65,9 @@ Script has been tested on the following Operating Systems (Linux Distributions)
 	Rocky Linux 8.5 (Green Obsidian)
 
 
-#####################################
+#######################
 To use update_dxspider_alternative.sh
-#####################################
+#######################
 
 Download script:
 
