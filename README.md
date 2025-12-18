@@ -2,10 +2,10 @@
 
 There are two scripts to update DXSpider:
 
-- `update_dxspider.sh` was created to update your DXSpider while the official site is down.
+- `update_dxspider.sh` will only work when the **official DXSpider repository** is back online.
 - `update_dxspider_alternative.sh` was created to update your DXSpider while the official site is down.
 
-In addition, this project includes an **installation script (from scratch)** that installs DXSpider from the **EA3CV GitHub repository** and configures it as a **systemd** service.
+In addition, this project includes a **fresh installation script (from scratch)** that installs DXSpider from the **EA3CV GitHub repository** and configures it as a **systemd** service.
 
 ---
 
@@ -19,28 +19,40 @@ This installation method deploys DXSpider from:
 - Symlink: `/spider -> /home/sysop/spider`
 - systemd service: `dxspider`
 
-## Files needed
+## Download installer (ZIP)
 
-Place these two files in the same directory:
+Download this repository as a ZIP and run the installer:
+
+```bash
+wget https://github.com/EA3CV/dxspider_update/archive/refs/heads/main.zip -O dxspider_tools.zip
+unzip dxspider_tools.zip
+cd dxspider_update-main
+
+chmod +x install_dxspider.sh
+sudo ./install_dxspider.sh
+```
+
+## Download installer (git clone)
+
+```bash
+git clone https://github.com/EA3CV/dxspider_update.git
+cd dxspider_update
+
+chmod +x install_dxspider.sh
+sudo ./install_dxspider.sh
+```
+
+## Files used by the installer
+
+The installer requires these two files to be in the same directory:
 
 - `install_dxspider.sh`
 - `distro_actions.conf`
 
-## Install steps
+## Interactive configuration
 
-1. Make the installer executable:
+During installation you will be prompted for:
 
-```bash
-chmod +x install_dxspider.sh
-```
-
-2. Run as root:
-
-```bash
-sudo ./install_dxspider.sh
-```
-
-3. Follow the prompts (the installer will ask for):
 - Cluster callsign (`mycall`)
 - Your callsign (`myalias`)
 - Name (`myname`)
@@ -48,23 +60,26 @@ sudo ./install_dxspider.sh
 - Locator (`mylocator`)
 - QTH (`myqth`)
 
-4. Verify the service:
+The main configuration file is:
+
+- `/spider/local/DXVars.pm`
+
+## Verify the service
 
 ```bash
 systemctl status dxspider
 ```
 
+Logs (if output is not suppressed in the unit file):
+
+```bash
+journalctl -u dxspider -f
+```
+
 ## Non-interactive install (optional)
 
 ```bash
-sudo NONINTERACTIVE=1 \
-DXCLUSTER_CALL=EA3CV \
-SELFCALL=EA3CV \
-MYNAME="Your Name" \
-EMAIL="you@example.com" \
-MYLOCATOR=JN11AA \
-MYQTH="City,Country" \
-./install_dxspider.sh
+sudo NONINTERACTIVE=1 DXCLUSTER_CALL=EA3CV SELFCALL=EA3CV MYNAME="Your Name" EMAIL="you@example.com" MYLOCATOR=JN11AA MYQTH="City,Country" ./install_dxspider.sh
 ```
 
 ---
@@ -93,13 +108,13 @@ cd dxspider_update-main
 chmod a+x update_dxspider.sh
 ```
 
-## Run
+## Run script
 
 ```bash
 ./update_dxspider.sh
 ```
 
-## Tested Operating Systems (Linux Distributions)
+## Script has been tested on the following Operating Systems (Linux Distributions)
 
 - CentOS Linux 7 (Core)
 - CentOS Linux 8 (Core)
@@ -148,7 +163,7 @@ cd dxspider_update-main
 chmod a+x update_dxspider_alternative.sh
 ```
 
-## Run
+## Run script
 
 ```bash
 ./update_dxspider_alternative.sh
@@ -158,7 +173,7 @@ chmod a+x update_dxspider_alternative.sh
 
 # Notes / References
 
-Remember that the alternative script is only for updating. For a new installation, see the development of Yiannis Panagou, SV5FRI at:
+Remember that the alternative script is only for updating. For a new installation, look at the development of Yiannis Panagou, SV5FRI at:
 
 - https://github.com/glaukos78/dxspider_installation_v2
 
