@@ -334,9 +334,23 @@ escape_sed_repl() {
 
 set_dxvars_field() {
   local key="$1" value="$2" file="${SPIDER_LINK}/local/DXVars.pm"
-  local ev
-  ev="$(escape_sed_repl "$value")"
-  su - "${SYSOP_USER}" -c "sed -i \"s/^${key}[[:space:]]*=.*/${key} = \\\"${ev}\\\";/\" '${file}'"
+
+  [[ -f "$file" ]] || die "DXVars.pm not found at: $file"
+
+  KEY="$key" VALUE="$value" perl -i -0777 -pe '
+    my $k = $ENV{KEY};
+    my $v = $ENV{VALUE};
+
+    # Escape for Perl double-quoted string
+    $v =~ s/\\/\\\\/g;
+    $v =~ s/"/\\"/g;
+
+    # Replace lines like: mycall = "...";
+    s/^(\s*\Q$k\E\s*=\s*).*(;\s*)$/${1}"$v"${2}/mg;
+
+    # Replace lines like: our $mycall = "...";   (in case the file uses Perl vars)
+    s/^(\s*(?:our\s+)?\$\Q$k\E\s*=\s*).*(;\s*)$/${1}"$v"${2}/mg;
+  ' "$file"
 }
 
 prompt_var() {
