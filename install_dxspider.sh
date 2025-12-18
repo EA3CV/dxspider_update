@@ -341,4 +341,225 @@ clone_from_bundle() {
   su - "${SYSOP_USER}" -c "git clone '${bundle_file}' '${SPIDER_DIR}'"
 
   # Checkout branch if exists
-  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}
+  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && (git checkout '${BRANCH}' || git checkout -b '${BRANCH}' 'origin/${BRANCH}' || true)"
+
+  # Sanity: verify tags/history are present
+  log "Bundle clone check:"
+  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && echo \"version=\$(git describe --tags --long --always) build=\$(git rev-list --count HEAD) commit=\$(git rev-parse --short HEAD)\""
+}
+
+clone_from_repo_fallback() {
+  log "Bundle not available. Falling back to REPO_URL clone: ${REPO_URL} (branch: ${BRANCH})"
+  if [[ -d "${SPIDER_DIR}/.git" ]]; then
+    su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git fetch --all --prune"
+  else
+    su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git clone '${REPO_URL}' ."
+  fi
+  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git checkout '${BRANCH}' || git checkout -b '${BRANCH}' 'origin/${BRANCH}'"
+  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git pull --ff-only || true"
+
+  log "Fallback clone check (may lack tags/history depending on REPO_URL):"
+  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && echo \"version=\$(git describe --tags --long --always) build=\$(git rev-list --count HEAD) commit=\$(git rev-parse --short HEAD)\" || true"
+}
+
+git_install_spider() {
+  log "Installing DXSpider (bundle-first)..."
+  if bundle_available_local || { [[ -n "${BUNDLE_URL}" && -n "${BUNDLE_SHA_URL}" ]]; }; then
+    clone_from_bundle
+  else
+    clone_from_repo_fallback
+  fi
+}
+
+# ----------------------------
+# App configuration
+# ----------------------------
+ensure_runtime_dirs() {
+  su - "${SYSOP_USER}" -c "mkdir -p '${SPIDER_LINK}/local' '${SPIDER_LINK}/local_cmd' '${SPIDER_LINK}/cmd_import' '${SPIDER_LINK}/local_data'"
+}
+
+install_local_files() {
+  [[ -f "${SPIDER_LINK}/perl/DXVars.pm.issue" ]] || die "Missing /spider/perl/DXVars.pm.issue"
+
+  if [[ ! -f "${SPIDER_LINK}/local/DXVars.pm" ]]; then
+    su - "${SYSOP_USER}" -c "cp '${SPIDER_LINK}/perl/DXVars.pm.issue' '${SPIDER_LINK}/local/DXVars.pm'"
+  else
+    log "DXVars.pm already exists. Leaving it untouched."
+  fi
+
+  if [[ -f "${SPIDER_LINK}/perl/Listeners.pm" ]]; then
+    if [[ ! -f "${SPIDER_LINK}/local/Listeners.pm" ]]; then
+      su - "${SYSOP_USER}" -c "cp '${SPIDER_LINK}/perl/Listeners.pm' '${SPIDER_LINK}/local/Listeners.pm'"
+    fi
+    su - "${SYSOP_USER}" -c "sed -i '17s/^#//' '${SPIDER_LINK}/local/Listeners.pm' || true"
+  fi
+}
+
+set_dxvars_field() {
+  local key="$1" value="$2" file="${SPIDER_LINK}/local/DXVars.pm"
+  [[ -f "$file" ]] || die "DXVars.pm not found at: $file"
+
+  KEY="$key" VALUE="$value" perl -i -0777 -pe '
+    my $k = $ENV{KEY};
+    my $v = $ENV{VALUE};
+    $v =~ s/\\/\\\\/g;
+    $v =~ s/"/\\"/g;
+
+    # Replace lines like: mycall = "...";
+    s/^(\s*\Q$k\E\s*=\s*).*(;\s*)$/${1}"$v"${2}/mg;
+
+    # Replace lines like: our $mycall = "...";
+    s/^(\s*(?:our\s+)?\$\Q$k\E\s*=\s*).*(;\s*)$/${1}"$v"${2}/mg;
+  ' "$file"
+}
+
+prompt_var() {
+  local var="$1" prompt="$2" def="${3:-}" val=""
+  if [[ "${NONINTERACTIVE}" == "1" ]]; then
+    val="${!var:-}"
+    [[ -n "$val" ]] || die "NONINTERACTIVE=1 but env var '${var}' is missing."
+    return 0
+  fi
+  if [[ -n "${!var:-}" ]]; then
+    return 0
+  fi
+  if [[ -n "$def" ]]; then
+    read -r -p "${prompt} [${def}]: " val
+    val="${val:-$def}"
+  else
+    read -r -p "${prompt}: " val
+    [[ -n "$val" ]] || die "Value required for ${var}."
+  fi
+  printf -v "$var" '%s' "$val"
+}
+
+configure_dxvars() {
+  log "Configuring /spider/local/DXVars.pm ..."
+  prompt_var DXCLUSTER_CALL "Please enter CallSign for DxCluster (mycall)" ""
+  prompt_var SELFCALL       "Please enter your CallSign (myalias)" ""
+  prompt_var MYNAME         "Please enter your Name (myname)" ""
+  prompt_var EMAIL          "Please enter your E-mail Address (myemail)" ""
+  prompt_var MYLOCATOR      "Please enter your Locator (mylocator, uppercase recommended)" ""
+  prompt_var MYQTH          "Please enter your QTH (myqth, comma without spaces recommended)" ""
+
+  MYLOCATOR="$(echo "${MYLOCATOR}" | tr '[:lower:]' '[:upper:]')"
+
+  set_dxvars_field "mycall"    "${DXCLUSTER_CALL}"
+  set_dxvars_field "myalias"   "${SELFCALL}"
+  set_dxvars_field "myname"    "${MYNAME}"
+  set_dxvars_field "myemail"   "${EMAIL}"
+  set_dxvars_field "mylocator" "${MYLOCATOR}"
+  set_dxvars_field "myqth"     "${MYQTH}"
+}
+
+fix_permissions() {
+  log "Fixing ownership/permissions..."
+
+  chown -R "${SYSOP_USER}:${SPIDER_GROUP}" "${SPIDER_DIR}"
+
+  find "${SPIDER_DIR}" -type d -exec chmod 2775 {} \;
+  find "${SPIDER_DIR}" -type f -exec chmod 0664 {} \;
+
+  if [[ -d "${SPIDER_DIR}/perl" ]]; then
+    find "${SPIDER_DIR}/perl" -type f -name "*.pl" -exec chmod 0775 {} \; 2>/dev/null || true
+    find "${SPIDER_DIR}/perl" -type f -name "*dbg" -exec chmod 0775 {} \; 2>/dev/null || true
+  fi
+
+  if [[ -f "${SPIDER_LINK}/perl/console.pl" ]]; then
+    ln -sfn "${SPIDER_LINK}/perl/console.pl" /usr/local/bin/dx
+    chmod 0775 /usr/local/bin/dx || true
+  fi
+
+  if compgen -G "${SPIDER_LINK}/perl/*dbg" >/dev/null; then
+    for f in ${SPIDER_LINK}/perl/*dbg; do
+      ln -sfn "$f" "/usr/local/bin/$(basename "$f")"
+      chmod 0775 "/usr/local/bin/$(basename "$f")" || true
+    done
+  fi
+}
+
+create_sysop_db() {
+  log "Now create basic user file (create_sysop.pl)..."
+  [[ -f "${SPIDER_LINK}/perl/create_sysop.pl" ]] || die "Missing /spider/perl/create_sysop.pl"
+  chmod 0775 "${SPIDER_LINK}/perl/create_sysop.pl" || true
+  su - "${SYSOP_USER}" -c "${SPIDER_LINK}/perl/create_sysop.pl"
+}
+
+# ----------------------------
+# systemd service
+# ----------------------------
+create_service() {
+  local unit="/etc/systemd/system/dxspider.service"
+  log "Creating systemd service: ${unit}"
+
+  cat > "${unit}" <<EOF
+[Unit]
+Description=Dxspider DXCluster service
+After=network.target
+
+[Service]
+Type=simple
+User=${SYSOP_USER}
+Group=${SPIDER_GROUP}
+ExecStart=/usr/bin/perl -w /spider/perl/cluster.pl
+# Comment out line below for logging everything to journal/syslog
+StandardOutput=null
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+}
+
+enable_and_start_service() {
+  log "Enabling and starting dxspider..."
+  systemctl enable dxspider
+  systemctl restart dxspider
+  systemctl --no-pager --full status dxspider || true
+}
+
+print_summary() {
+  cat <<EOF
+
+===============================================================
+DXSpider installation finished
+===============================================================
+Bundle    : $(bundle_available_local && echo "LOCAL (${LOCAL_BUNDLE_GZ})" || echo "REMOTE/FALLBACK")
+Repo      : ${REPO_URL}
+Branch    : ${BRANCH}
+Path      : ${SPIDER_DIR}
+Symlink   : ${SPIDER_LINK} -> ${SPIDER_DIR}
+User      : ${SYSOP_USER}
+Group     : ${SPIDER_GROUP}
+Service   : systemctl status dxspider
+
+EOF
+}
+
+main() {
+  require_root
+  run_actions_for_distro
+
+  ensure_group
+  ensure_user
+  prepare_paths
+
+  ensure_cpanm_and_modules
+  git_install_spider
+
+  ensure_runtime_dirs
+  install_local_files
+  configure_dxvars
+  fix_permissions
+
+  create_sysop_db
+
+  create_service
+  enable_and_start_service
+
+  print_summary
+}
+
+main "$@"
