@@ -299,11 +299,16 @@ clone_from_bundle() {
 
   local tmpdir bundle_gz sha_file bundle_file
   tmpdir="$(mktemp -d)"
+
+  # Allow sysop to read the bundle from this temp dir
+  chmod 0755 "${tmpdir}"
+  chown "${SYSOP_USER}:${SPIDER_GROUP}" "${tmpdir}"
+
   bundle_gz="${tmpdir}/spider.bundle.gz"
   sha_file="${tmpdir}/spider.bundle.gz.sha256"
 
   if bundle_available_local; then
-    log "Using LOCAL bundle shipped with this installer:"
+    log "Using LOCAL bundle:"
     log "  ${LOCAL_BUNDLE_GZ}"
     cp -f "${LOCAL_BUNDLE_GZ}" "${bundle_gz}"
     cp -f "${LOCAL_BUNDLE_SHA}" "${sha_file}"
@@ -322,7 +327,11 @@ clone_from_bundle() {
   gunzip -f "${bundle_gz}"
   bundle_file="${tmpdir}/spider.bundle"
 
-  # Clone into SPIDER_DIR (must be empty / non-existent)
+  # Ensure sysop can read the extracted bundle file
+  chown "${SYSOP_USER}:${SPIDER_GROUP}" "${bundle_file}"
+  chmod 0644 "${bundle_file}"
+
+  # Destination must be empty or FORCE=1
   if [[ -d "${SPIDER_DIR}" && -n "$(ls -A "${SPIDER_DIR}" 2>/dev/null || true)" ]]; then
     if [[ "${FORCE}" == "1" ]]; then
       log "FORCE=1: removing existing '${SPIDER_DIR}' before bundle clone..."
@@ -331,21 +340,20 @@ clone_from_bundle() {
       die "Destination '${SPIDER_DIR}' is not empty. Use FORCE=1 to replace it."
     fi
   fi
-  mkdir -p "${SPIDER_DIR}"
-  chown "${SYSOP_USER}:${SPIDER_GROUP}" "${SPIDER_DIR}"
+
+  mkdir -p "$(dirname "${SPIDER_DIR}")"
+  chown "${SYSOP_USER}:${SPIDER_GROUP}" "$(dirname "${SPIDER_DIR}")" || true
+  rm -rf "${SPIDER_DIR}"
 
   log "Cloning DXSpider from bundle into ${SPIDER_DIR}..."
-  # Clone from bundle into directory; if SPIDER_DIR exists empty, git clone will create subdir unless we pass path.
-  # So we clone into a temp dir then move, or clone directly with SPIDER_DIR as target and ensure parent exists.
-  rm -rf "${SPIDER_DIR}"
   su - "${SYSOP_USER}" -c "git clone '${bundle_file}' '${SPIDER_DIR}'"
 
-  # Checkout branch if exists
   su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && (git checkout '${BRANCH}' || git checkout -b '${BRANCH}' 'origin/${BRANCH}' || true)"
 
-  # Sanity: verify tags/history are present
-  log "Bundle clone check:"
-  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && echo \"version=\$(git describe --tags --long --always) build=\$(git rev-list --count HEAD) commit=\$(git rev-parse --short HEAD)\""
+  log "Bundle clone check (must show tags/history):"
+  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git describe --tags --long --always"
+  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git rev-list --count HEAD"
+  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git rev-parse --short HEAD"
 }
 
 clone_from_repo_fallback() {
