@@ -2,7 +2,7 @@
 
 There are two scripts to update DXSpider:
 
-- `update_dxspider.sh` was created to install your DXSpider while the official site is down.
+- `update_dxspider.sh` was created to update your DXSpider while the official site is down.
 - `update_dxspider_alternative.sh` was created to update your DXSpider while the official site is down.
 
 In addition, this project includes an **installation script (from scratch)** that installs DXSpider from the **EA3CV GitHub repository** and configures it as a **systemd** service.
