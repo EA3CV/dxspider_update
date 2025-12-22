@@ -171,12 +171,3 @@ chmod a+x update_dxspider_alternative.sh
 
 ---
 
-# Notes / References
-
-Remember that the alternative script is only for updating. For a new installation, look at the development of Yiannis Panagou, SV5FRI at:
-
-- https://github.com/glaukos78/dxspider_installation_v2
-
-Sysops who want to be informed or participate in the evolution, new versions/builds and questions about DXSpider can request to subscribe to the official list:
-
-- https://mailman.tobit.co.uk/mailman/listinfo/dxspider-support
