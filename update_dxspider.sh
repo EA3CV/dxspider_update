@@ -247,7 +247,7 @@ swap_tree()
         mv "${newtree}" "${oldtree}"
 
         # Fix ownership/permissions similar to your original
-        chown -R "$OWNER.$GROUP" "${oldtree}"
+        chown -R "$OWNER:$GROUP" "${oldtree}"
         cd "${oldtree}"
         find ./ -type d -exec chmod 2775 {} \;
         find ./ -type f -exec chmod 775 {} \;
