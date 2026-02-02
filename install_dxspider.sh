@@ -6,8 +6,8 @@
 #
 # Fallback (optional): if bundle is missing, it can clone from REPO_URL.
 #
-# Version: 2.2
-# Date: 2025-12-18
+# Version: 2.3
+# Date: 20260202
 
 set -Eeuo pipefail
 
@@ -399,7 +399,7 @@ install_local_files() {
     if [[ ! -f "${SPIDER_LINK}/local/Listeners.pm" ]]; then
       su - "${SYSOP_USER}" -c "cp '${SPIDER_LINK}/perl/Listeners.pm' '${SPIDER_LINK}/local/Listeners.pm'"
     fi
-    su - "${SYSOP_USER}" -c "sed -i '17s/^#//' '${SPIDER_LINK}/local/Listeners.pm' || true"
+    su - "${SYSOP_USER}" -c "sed -i -E 's/^[[:space:]]*#[[:space:]]*(\\[\\s*\"0\\.0\\.0\\.0\"\\s*,\\s*7300\\s*\\],)/\\1/' '${SPIDER_LINK}/local/Listeners.pm' || true"
   fi
 }
 
