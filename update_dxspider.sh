@@ -270,7 +270,7 @@ config_app()
         # robust checkout for branch
         su - "$OWNER" -c "cd '${DXSPATH}' && (git checkout '${BRANCH}' || git checkout -B '${BRANCH}' 'origin/${BRANCH}' || true)"
 
-        chown -R "$OWNER.$GROUP" "${DXSPATH}"
+        chown -R "$OWNER:$GROUP" "${DXSPATH}"
         cd "${DXSPATH}"
         find ./ -type d -exec chmod 2775 {} \;
         find ./ -type f -exec chmod 775 {} \;
