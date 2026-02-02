@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 #
 # Script for UPDATE and DXSpider Cluster configuration (deterministic bundle-based)
@@ -7,16 +7,16 @@
 # By Kin, EA3CV
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.6.6
-# Date 20251222
+# Version 0.6.7
+# Date 20260202
 #
 # Notes:
 # - Keeps original backup/restore functionality in /home/spider.backup
-#   so version/build/commit (git describe / rev-list) are correct.
-# - Does not leave any cloned "dx-spider" directory behind (uses a temp dir).
+# - Uses bundled git history so version/build/commit are correct.
+# - Does not leave any cloned directory behind (uses a temp dir).
 #
 
-set -e
+set -Eeuo pipefail
 
 # -----------------------------
 # Bundle assets (relative paths)
@@ -196,11 +196,11 @@ install_package_debian()
 }
 
 # -----------------------------
-# Backup / restore (kept, but fixed to ALWAYS create backup)
+# Backup / restore
 # -----------------------------
 is_backup()
 {
-        if [ -d /home/spider.backup ] && [ ! -z "$(ls -A /home/spider.backup 2>/dev/null)" ]; then
+        if [ -d /home/spider.backup ] && [ -n "$(ls -A /home/spider.backup 2>/dev/null)" ]; then
                 BACKUP="true"
                 echo "Backup exists and is not empty."
         else
@@ -235,7 +235,7 @@ backup()
         if [ "${BACKUP}" = "true" ]; then
                 echo "A backup directory already exists."
                 echo "Do you want to delete it and create a new backup? [Y/N] "
-                read YESNO
+                read -r YESNO
                 if [ "${YESNO}" = "N" ]; then
                         echo "Using the current Backup."
                         return 0
@@ -386,7 +386,10 @@ update_spider()
         verify_bundle_assets
 
         TMPDIR_UPDATE="$(mktemp -d /tmp/dxspider-update.XXXXXX)"
-        mkdir -p "$TMPDIR_UPDATE"
+        # --- FIX #3: ensure sysop can access temp directory ---
+        chmod 0755 "$TMPDIR_UPDATE" || true
+        chown -R "$OWNER:$GROUP" "$TMPDIR_UPDATE" || true
+
         cp -f "$BUNDLE_GZ" "$TMPDIR_UPDATE/spider.bundle.gz"
         cp -f "$BUNDLE_SHA" "$TMPDIR_UPDATE/spider.bundle.gz.sha256"
 
@@ -395,7 +398,8 @@ update_spider()
         [ -f "$TMPDIR_UPDATE/spider.bundle" ] || die "Bundle decompression failed."
 
         rm -rf "$TMPDIR_UPDATE/src"
-        git clone "$TMPDIR_UPDATE/spider.bundle" "$TMPDIR_UPDATE/src" || die "git clone from bundle failed."
+        # --- FIX #3: clone as sysop so ownership/permissions match ---
+        su - "$OWNER" -c "git clone '$TMPDIR_UPDATE/spider.bundle' '$TMPDIR_UPDATE/src'" || die "git clone from bundle failed."
 
         su - "$OWNER" -c "cd '$TMPDIR_UPDATE/src' && git checkout mojo >/dev/null 2>&1 || git checkout -b mojo origin/mojo" || true
 
@@ -433,7 +437,7 @@ update_spider()
 }
 
 # -----------------------------
-# Config + service (kept as original)
+# Config + service
 # -----------------------------
 config_app()
 {
@@ -479,18 +483,19 @@ create_service()
 
         if [ -f "/etc/systemd/system/dxspider.service" ]; then
                 echo "Files dxspider.service exist"
+                # Normalize possible old bug: ExecStart= /path -> ExecStart=/path
+                sed -i -E 's/^ExecStart=[[:space:]]+/ExecStart=/' /etc/systemd/system/dxspider.service || true
         else
-                touch /etc/systemd/system/dxspider.service
-                cat >> /etc/systemd/system/dxspider.service <<EOL
+                cat > /etc/systemd/system/dxspider.service <<EOL
 [Unit]
-Description= Dxspider DXCluster service
+Description=Dxspider DXCluster service
 After=network.target
 
 [Service]
 Type=simple
 User=$OWNER
 Group=$GROUP
-ExecStart= /usr/bin/perl -w /spider/perl/cluster.pl
+ExecStart=/usr/bin/perl -w /spider/perl/cluster.pl
 StandardOutput=null
 Restart=always
 
@@ -508,7 +513,7 @@ enable_service()
         echo -e "Enable Dxspider Service to start up"
         echo -e " "
         systemctl enable dxspider 2>/dev/null || true
-        systemctl start dxspider 2>/dev/null || true
+        systemctl restart dxspider 2>/dev/null || true
 }
 
 # -----------------------------
