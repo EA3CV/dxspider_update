@@ -288,7 +288,7 @@ run_restore()
                 mkdir -p "${OLD_DXS_PATH}"
                 cp -a /home/spider.backup/spider "${OLD_DXS_PATH}/../"
                 cd "${OLD_DXS_PATH}" || exit 1
-                chown -R "$OWNER.$GROUP" "${OLD_DXS_PATH}" || true
+                chown -R "$OWNER:$GROUP" "${OLD_DXS_PATH}" || true
                 find ./ -type d -exec chmod 2775 {} \; || true
                 find ./ -type f -exec chmod 0775 {} \; || true
 
@@ -444,7 +444,7 @@ config_app()
 
         cd "${DXSPATH}" || exit 1
 
-        chown -R "$OWNER.$GROUP" "${DXSPATH}" || true
+        chown -R "$OWNER:$GROUP" "${DXSPATH}" || true
         find ./ -type d -exec chmod 2775 {} \; || true
         find ./ -type f -exec chmod 0775 {} \; || true
         su - "$OWNER" -c "mkdir -p '${DXSPATH}/local'" || true
