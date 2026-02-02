@@ -491,7 +491,7 @@ run_restore()
 		mkdir ${OLD_DXS_PATH}
 		cp -r /home/spider.backup/spider ${OLD_DXS_PATH}/../
                 cd ${OLD_DXS_PATH}
-                chown -R $OWNER.$GROUP ${OLD_DXS_PATH}
+                chown -R $OWNER:$GROUP ${OLD_DXS_PATH}
                 find ./ -type d -exec chmod 2775 {} \;
                 find ./ -type f -exec chmod 775 {} \;
 
