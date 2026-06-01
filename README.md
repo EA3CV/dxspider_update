@@ -141,6 +141,7 @@ chmod a+x update_dxspider.sh
 - Ubuntu 22.04.4 LTS
 - Ubuntu 22.04.5 LTS
 - Ubuntu 24.04.2 LTS
+- Ubuntu 26.04 LTS
 - Rocky Linux 8.5 (Green Obsidian)
 
 ---
