@@ -7,8 +7,8 @@
 # Create By Kin, EA3CV and based on the code of Yiannis Panagou, SV5FRI
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.6.0
-# Date 20260202
+# Version 0.6.1
+# Date 20260601
 #
 
 set -Eeuo pipefail
@@ -141,6 +141,8 @@ check_distro() {
                         elif [ "${distroname}" == "Ubuntu 22.04.5 LTS" ]; then
                                 install_package_debian
                         elif [ "${distroname}" == "Ubuntu 24.04.2 LTS" ]; then
+                                install_package_debian
+                        elif [ "${distroname}" == "Ubuntu 26.04 LTS" ]; then
                                 install_package_debian
                         elif [ "${distroname}" == "Fedora Linux 39 (Server Edition)" ]; then
                                 install_epel_8
