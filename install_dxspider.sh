@@ -6,8 +6,8 @@
 #
 # Fallback (optional): if bundle is missing, it can clone from REPO_URL.
 #
-# Version: 2.3
-# Date: 20260202
+# Version: 2.4
+# Date: 20260618
 
 set -Eeuo pipefail
 
@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # ----------------------------
 # Defaults (override via env)
 # ----------------------------
-: "${REPO_URL:=https://github.com/EA3CV/dx-spider.git}"   # fallback only
+: "${REPO_URL:=git://scm.dxspider.org/spider}"   # fallback only
 : "${BRANCH:=mojo}"
 
 : "${SYSOP_USER:=sysop}"
