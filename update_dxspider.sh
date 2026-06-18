@@ -7,14 +7,14 @@
 # Create By Kin, EA3CV and based on the code of Yiannis Panagou, SV5FRI
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.6.1
-# Date 20260601
+# Version 0.6.2
+# Date 20260618
 #
 
 set -Eeuo pipefail
 
 # --- Defaults (can be overridden via env) ---
-: "${REPO_URL:=https://scm.dxcluster.org/scm/spider}"   # safer than git:// (often blocked)
+: "${REPO_URL:=git://scm.dxspider.org/spider}"
 : "${BRANCH:=mojo}"
 : "${BACKUP_DIR:=/home/spider.backup}"
 : "${TMP_BASE:=/tmp}"
