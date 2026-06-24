@@ -7,8 +7,8 @@
 # Create By Kin, EA3CV and based on the code of Yiannis Panagou, SV5FRI
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.6.2
-# Date 20260618
+# Version 0.6.3
+# Date 20260624
 #
 
 set -Eeuo pipefail
@@ -32,6 +32,7 @@ STATUS=""
 
 die() { echo -e "ERROR: $*" >&2; exit 1; }
 log() { echo -e "$*"; }
+sed_escape() { printf '%s' "$1" | sed -e 's/[\\\/&]/\\&/g'; }
 
 trap 'die "Aborted at line $LINENO (command: $BASH_COMMAND)"' ERR
 
@@ -41,30 +42,32 @@ backup()
         is_service
         is_backup
         make_config
+
+        # Check the repository before stopping or changing anything.
+        preflight_repo
+
         stop_spider
 
         if [ "${BACKUP}" = "true" ]; then
                 echo "A backup directory already exists."
                 echo "Do you want to delete it? [Y/N] "
                 read -r YESNO
+                YESNO="${YESNO^^}"
                 if [ "${YESNO}" = "N" ]; then
-                        stop_spider
                         [ -f "${BACKUP_DIR}/config.backup.old" ] && mv "${BACKUP_DIR}/config.backup.old" "${BACKUP_DIR}/config.backup" || true
                         echo "Using the current Backup."
                 elif [ "${YESNO}" = "Y" ]; then
                         echo " "
                         echo "Backup begins ..."
-                        stop_spider
                         rm -rf "${BACKUP_DIR}"
                         mkdir -p "${BACKUP_DIR}"
-                        [ -f "${OLD_SERVICE_PATH}" ] && mv "${OLD_SERVICE_PATH}" "${BACKUP_DIR}/dxspider.service" || true
+                        [ -f "${OLD_SERVICE_PATH}" ] && cp -a "${OLD_SERVICE_PATH}" "${BACKUP_DIR}/dxspider.service" || true
                         cp -a "${DXSPATH}" "${BACKUP_DIR}/spider"
                 else
                         echo "Bye!"
                         exit 1
                 fi
         else
-                # If no backup existed, create it now
                 echo " "
                 echo "Backup begins ..."
                 mkdir -p "${BACKUP_DIR}"
@@ -72,18 +75,25 @@ backup()
                 cp -a "${DXSPATH}" "${BACKUP_DIR}/spider"
         fi
 }
-
 # Function Check Distribution and Version
 check_distro() {
 
         arch=$(uname -m)
         kernel=$(uname -r)
         if [ -f "/etc/os-release" ]; then
-                distroname=$(grep PRETTY_NAME /etc/os-release | sed 's/PRETTY_NAME=//g' | tr -d '="')
+                # shellcheck disable=SC1091
+                . /etc/os-release
+                distroname="${PRETTY_NAME:-${ID:-unknown} ${VERSION_ID:-}}"
+                distro_id="${ID:-unknown}"
+                version_id="${VERSION_ID:-}"
         elif [ -f "/etc/redhat-release" ]; then
                 distroname=$(cat /etc/redhat-release)
+                distro_id="rhel"
+                version_id=""
         else
                 distroname="$(uname -s) $(uname -r)"
+                distro_id="unknown"
+                version_id=""
         fi
 
         echo -e " "
@@ -95,78 +105,29 @@ check_distro() {
         read -n 1 -s -r -p $'Press any key to continue...'
         echo -e " "
 
-        if [ "${distroname}" == "CentOS Linux 7 (Core)" ]; then
-                                install_epel_7
-                                install_package_CentOS_7
-                        elif [ "${distroname}" == "CentOS Linux 8 (Core)" ]; then
-                                install_epel_8
-                                install_package_CentOS_8
-                        elif [ "${distroname}" == "Rocky Linux 8.5 (Green Obsidian)" ]; then
-                                install_epel_8
-                                install_package_CentOS_8
-                        elif [ "${distroname}" == "Raspbian GNU/Linux 8 (jessie)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Raspbian GNU/Linux 9 (stretch)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Debian GNU/Linux 9 (stretch)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Raspbian GNU/Linux 10 (buster)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Debian GNU/Linux 10 (buster)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Raspbian GNU/Linux 11 (bullseye)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Raspbian GNU/Linux 13 (trixie)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Raspbian GNU/Linux 12 (bookworm)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Debian GNU/Linux 11 (bullseye)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Debian GNU/Linux 12 (bookworm)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Debian GNU/Linux 13 (trixie)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 20.04.6 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 22.04 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 22.04.1 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 22.04.2 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 22.04.3 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 22.04.4 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 22.04.5 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 24.04.2 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 26.04 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Fedora Linux 39 (Server Edition)" ]; then
-                                install_epel_8
-                                install_package_CentOS_8
-                        elif [ "${distroname}" == "Fedora Linux 39 (Workstation Edition)" ]; then
-                                install_epel_8
-                                install_package_CentOS_8
-                        elif [ "${distroname}" == "Debian GNU/Linux bookworm/sid" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Linux Mint 21.1" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Linux Mint 21.3" ]; then
-                                install_package_debian
-                else
+        case "${distro_id}:${version_id}" in
+                debian:*|raspbian:*|ubuntu:*|linuxmint:*)
+                        install_package_debian
+                        ;;
+                centos:7*|rhel:7*)
+                        install_epel_7
+                        install_package_CentOS_7
+                        ;;
+                centos:8*|rhel:8*|rocky:8*|fedora:*)
+                        install_epel_8
+                        install_package_CentOS_8
+                        ;;
+                *)
                         echo -e " "
                         echo -e "==============================================================="
                         echo -e "      Your OS distribution ${distroname} is not supported"
                         echo -e "=============================================================== "
                         echo -e " "
                         echo -e " "
-            exit 1
-        fi
+                        exit 1
+                        ;;
+        esac
 }
-
 # Check the script is being run by root user
 check_run_user()
 {
@@ -267,7 +228,6 @@ swap_tree()
 
 config_app()
 {
-        # Fix up permissions ( AS THE SYSOP USER )
         echo "Fix up permissions"
         echo -e " "
         echo -e "Please use capital letters"
@@ -275,12 +235,9 @@ config_app()
 
         cd "${DXSPATH}"
 
-        # These operations can fail if already on mojo; make them robust
-        su - "$OWNER" -c "cd '${DXSPATH}' && git reset --hard"
-        su - "$OWNER" -c "cd '${DXSPATH}' && git pull --ff-only || git pull"
-
-        # robust checkout for branch
-        su - "$OWNER" -c "cd '${DXSPATH}' && (git checkout '${BRANCH}' || git checkout -B '${BRANCH}' 'origin/${BRANCH}' || true)"
+        # The tree has already been freshly cloned and checked out.
+        # Do not run another pull here; it can introduce unrelated failures.
+        su - "$OWNER" -c "cd '${DXSPATH}' && git status --short >/dev/null"
 
         chown -R "$OWNER:$GROUP" "${DXSPATH}"
         cd "${DXSPATH}"
@@ -302,10 +259,11 @@ config_app()
         insert_qth
 
         echo -e "Now create basic user file"
-        su - "$OWNER" -c "/spider/perl/create_sysop.pl"
+        su - "$OWNER" -c "'${DXSPATH}/perl/create_sysop.pl'"
         echo -e " "
         echo -e "Installation has been finished."
-        echo -e "Now login as sysop user.\nStart application and check if everything is ok with follow command /spider/perl/cluster.pl"
+        echo -e "Now login as ${OWNER} user."
+        echo -e "Start application and check if everything is ok with: ${DXSPATH}/perl/cluster.pl"
 }
 
 create_service()
@@ -314,12 +272,9 @@ create_service()
         echo -e "Now make configuration for systemd dxspider service"
         echo -e " "
 
-        if [ -f "/etc/systemd/system/dxspider.service" ]; then
-                echo "Files dxspider.service exist"
-                # Normalize possible old bug: ExecStart= /path  -> ExecStart=/path
-                sed -i -E 's/^ExecStart=[[:space:]]+/ExecStart=/' /etc/systemd/system/dxspider.service || true
-        else
-                cat > /etc/systemd/system/dxspider.service <<EOL
+        # Always write the service with the real DXSpider path selected by the user.
+        # The old service is already saved in the backup directory before this point.
+        cat > /etc/systemd/system/dxspider.service <<EOL
 [Unit]
 Description=Dxspider DXCluster service
 After=network.target
@@ -328,7 +283,7 @@ After=network.target
 Type=simple
 User=$OWNER
 Group=$GROUP
-ExecStart=/usr/bin/perl -w /spider/perl/cluster.pl
+ExecStart=/usr/bin/perl -w ${DXSPATH}/perl/cluster.pl
 # Comment out line below for logging everything to /var/log/messages
 StandardOutput=null
 Restart=always
@@ -336,7 +291,6 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 EOL
-        fi
 
         systemctl daemon-reload || true
         echo -e " "
@@ -355,8 +309,7 @@ enable_service()
 #
 install_epel_7()
 {
-        yum check-update ; yum -y update
-        yum -y install epel-release
+        yum -y install epel-release || true
 }
 
 # Install extra packages for CentOS 7.x
@@ -364,9 +317,8 @@ install_package_CentOS_7()
 {
         echo -e "Starting Installation Dxspider Cluster"
         echo -e " "
-        yum check-update ; yum -y update
-        yum -y install perl git gcc make perl-TimeDate perl-Time-HiRes perl-Digest-SHA1 perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-Digest-SHA perl-IO-Compress curl libnet-cidr-lite-perl
-        cpanm install Curses
+        yum -y install perl git gcc make rsync perl-TimeDate perl-Time-HiRes perl-Digest-SHA1 perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-Digest-SHA perl-IO-Compress curl libnet-cidr-lite-perl
+        command -v cpanm >/dev/null 2>&1 && cpanm Curses || true
 }
 
 ## CentOS 8.x
@@ -376,15 +328,13 @@ install_epel_8()
         echo -e "Starting Installation Dxspider Cluster"
         echo -e " "
         dnf makecache --refresh
-        dnf check-update ; dnf -y update
-        dnf -y install epel-release
+        dnf -y install epel-release || true
 }
 
 # Install extra packages for CentOS 8.x
 install_package_CentOS_8()
 {
-        dnf check-update ; dnf -y update
-        dnf -y install perl git gcc make perl-TimeDate perl-Time-HiRes perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-IO-Compress perl-Digest-SHA perl-Net-CIDR-Lite curl libnet-cidr-lite-perl
+        dnf -y install perl git gcc make rsync perl-TimeDate perl-Time-HiRes perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-IO-Compress perl-Digest-SHA perl-Net-CIDR-Lite curl libnet-cidr-lite-perl
 }
 
 ## Debian & raspbian
@@ -393,8 +343,8 @@ install_package_debian()
 {
         echo -e "Starting Installation Dxspider Cluster"
         echo -e " "
-        apt-get update ; apt-get -y upgrade
-        apt-get -y install perl libtimedate-perl libnet-telnet-perl libcurses-perl libdigest-sha-perl libdata-dumper-simple-perl git libjson-perl libmojolicious-perl  libdata-structure-util-perl libmath-round-perl libev-perl libjson-xs-perl build-essential procps libnet-cidr-lite-perl curl
+        apt-get update
+        apt-get -y install perl rsync libtimedate-perl libnet-telnet-perl libcurses-perl libdigest-sha-perl libdata-dumper-simple-perl git libjson-perl libmojolicious-perl  libdata-structure-util-perl libmath-round-perl libev-perl libjson-xs-perl build-essential procps libnet-cidr-lite-perl curl
 }
 
 # Enter CallSign for cluster
@@ -404,7 +354,8 @@ insert_cluster_call()
         chr="\""
         read -r DXCALL
         echo "${DXCALL}"
-        su - "$OWNER" -c "sed -i 's/mycall =.*/mycall = ${chr}${DXCALL}${chr};/' /spider/local/DXVars.pm"
+        DXCALL_ESC=$(sed_escape "${DXCALL}")
+        su - "$OWNER" -c "sed -i 's/mycall =.*/mycall = ${chr}${DXCALL_ESC}${chr};/' '${DXSPATH}/local/DXVars.pm'"
 }
 
 # Enter your CallSign
@@ -414,7 +365,8 @@ insert_call()
         chr="\""
         read -r SELFCALL
         echo "${SELFCALL}"
-        su - "$OWNER" -c "sed -i 's/myalias =.*/myalias = ${chr}${SELFCALL}${chr};/' /spider/local/DXVars.pm"
+        SELFCALL_ESC=$(sed_escape "${SELFCALL}")
+        su - "$OWNER" -c "sed -i 's/myalias =.*/myalias = ${chr}${SELFCALL_ESC}${chr};/' '${DXSPATH}/local/DXVars.pm'"
 }
 
 # Enter your Name
@@ -424,7 +376,8 @@ insert_name()
         chr="\""
         read -r MYNAME
         echo "${MYNAME}"
-        su - "$OWNER" -c "sed -i 's/myname =.*/myname = ${chr}${MYNAME}${chr};/' /spider/local/DXVars.pm"
+        MYNAME_ESC=$(sed_escape "${MYNAME}")
+        su - "$OWNER" -c "sed -i 's/myname =.*/myname = ${chr}${MYNAME_ESC}${chr};/' '${DXSPATH}/local/DXVars.pm'"
 }
 
 # Enter your E-mail
@@ -434,7 +387,8 @@ insert_email()
         chr="\""
         read -r EMAIL
         echo "${EMAIL}"
-        su - "$OWNER" -c "sed -i 's/myemail =.*/myemail = ${chr}${EMAIL}${chr};/' /spider/local/DXVars.pm"
+        EMAIL_ESC=$(sed_escape "${EMAIL}")
+        su - "$OWNER" -c "sed -i 's/myemail =.*/myemail = ${chr}${EMAIL_ESC}${chr};/' '${DXSPATH}/local/DXVars.pm'"
 }
 
 # Enter your mylocator
@@ -444,7 +398,8 @@ insert_locator()
         chr="\""
         read -r MYLOCATOR
         echo "${MYLOCATOR}"
-        su - "$OWNER" -c "sed -i 's/mylocator =.*/mylocator = ${chr}${MYLOCATOR}${chr};/' /spider/local/DXVars.pm"
+        MYLOCATOR_ESC=$(sed_escape "${MYLOCATOR}")
+        su - "$OWNER" -c "sed -i 's/mylocator =.*/mylocator = ${chr}${MYLOCATOR_ESC}${chr};/' '${DXSPATH}/local/DXVars.pm'"
 }
 
 # Enter your myqth
@@ -454,7 +409,8 @@ insert_qth()
         chr="\""
         read -r MYQTH
         echo "${MYQTH}"
-        su - "$OWNER" -c "sed -i 's/myqth =.*/myqth = ${chr}${MYQTH}${chr};/' /spider/local/DXVars.pm"
+        MYQTH_ESC=$(sed_escape "${MYQTH}")
+        su - "$OWNER" -c "sed -i 's/myqth =.*/myqth = ${chr}${MYQTH_ESC}${chr};/' '${DXSPATH}/local/DXVars.pm'"
 
         echo -e " "
         echo -e "================================================================="
@@ -502,10 +458,10 @@ is_service()
 
 is_spider()
 {
-        if [ -f "$DXSPATH/perl/cluster.pl" ]; then
+        if [ -f "${DXSPATH}/perl/cluster.pl" ]; then
                 echo "Getting owner and group ..."
-                OWNER=$(stat -c '%U' "$DXSPATH/perl/cluster.pl")
-                GROUP=$(stat -c '%G' "$DXSPATH/perl/cluster.pl")
+                OWNER=$(stat -c '%U' "${DXSPATH}/perl/cluster.pl")
+                GROUP=$(stat -c '%G' "${DXSPATH}/perl/cluster.pl")
         else
                 echo "DXSpider is not installed where indicated."
                 echo "Try again."
@@ -579,15 +535,19 @@ run_restore()
         if [ "${BACKUP}" = "true" ]; then
                 stop_spider
                 systemctl disable dxspider || true
-                rm -rf "${DXSPATH}"
-                mkdir -p "${OLD_DXS_PATH}"
-                cp -a "${BACKUP_DIR}/spider" "$(dirname "${OLD_DXS_PATH}")/"
+
+                rm -rf "${OLD_DXS_PATH}"
+                mkdir -p "$(dirname "${OLD_DXS_PATH}")"
+                cp -a "${BACKUP_DIR}/spider" "${OLD_DXS_PATH}"
+
                 cd "${OLD_DXS_PATH}"
                 chown -R "$OWNER:$GROUP" "${OLD_DXS_PATH}"
                 find ./ -type d -exec chmod 2775 {} \;
                 find ./ -type f -exec chmod 775 {} \;
 
-                cp -f "${BACKUP_DIR}/dxspider.service" "$OLD_SERVICE_PATH" || true
+                if [ -f "${BACKUP_DIR}/dxspider.service" ]; then
+                        cp -f "${BACKUP_DIR}/dxspider.service" "$OLD_SERVICE_PATH" || true
+                fi
                 systemctl daemon-reload || true
                 systemctl enable dxspider || true
                 systemctl restart dxspider || true
@@ -602,8 +562,9 @@ run_restore()
 
 stop_spider()
 {
-        if [ "${OLD_TYPE}" = "pid" ] && [ -n "${PID}" ]; then
-                kill -9 "${PID}" || true
+        if [ "${OLD_TYPE}" = "pid" ]; then
+                [ -z "${PID}" ] && PID=$(pgrep -f cluster.pl | head -n 1 || true)
+                [ -n "${PID}" ] && kill -9 "${PID}" || true
         else
                 systemctl stop dxspider || true
         fi
@@ -617,8 +578,6 @@ update_spider()
         # - preserve local/local_data
         # - swap into DXSPATH
         # This avoids leaving system non-startable when repo unreachable.
-
-        preflight_repo
 
         echo -e "Now starting to download application DxSpider (safe update)"
         echo -e " "
@@ -663,6 +622,7 @@ welcome()
         echo -e " "
         echo -n "Please enter [U]pdate, [R]estore o [Q]uit: "
         read -r OPTION
+        OPTION="${OPTION^^}"
 
         if [ "${OPTION}" == "U" ]; then
                 echo -e " "
