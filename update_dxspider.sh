@@ -191,10 +191,15 @@ clone_to_temp()
 {
         local tmpdir
         tmpdir="$(mktemp -d "${TMP_BASE}/dxspider.update.XXXXXX")"
+
+        # The temporary directory is created by root, but git clone is run as
+        # the DXSpider owner user. Give ownership to that user so it can create
+        # the spider directory inside the temporary directory.
+        chown "$OWNER:$GROUP" "$tmpdir"
         chmod 0755 "$tmpdir"
 
         echo -e "Cloning new DXSpider tree into: ${tmpdir}/spider"
-        su - "$OWNER" -c "git clone '${REPO_URL}' '${tmpdir}/spider'"
+        su - "$OWNER" -c "git clone '${REPO_URL}' '${tmpdir}/spider'" || die "Unable to clone repository into ${tmpdir}/spider"
 
         su - "$OWNER" -c "cd '${tmpdir}/spider' && git fetch --all --tags --prune"
 
