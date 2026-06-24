@@ -198,13 +198,18 @@ clone_to_temp()
         chown "$OWNER:$GROUP" "$tmpdir"
         chmod 0755 "$tmpdir"
 
-        echo -e "Cloning new DXSpider tree into: ${tmpdir}/spider"
-        su - "$OWNER" -c "git clone '${REPO_URL}' '${tmpdir}/spider'" || die "Unable to clone repository into ${tmpdir}/spider"
+        # IMPORTANT:
+        # This function is called as: tmpdir="$(clone_to_temp)".
+        # Therefore, stdout must contain ONLY the final temporary path.
+        # All progress messages and git output must go to stderr, otherwise
+        # tmpdir gets polluted with text and rsync may interpret it as a remote host.
+        echo -e "Cloning new DXSpider tree into: ${tmpdir}/spider" >&2
+        su - "$OWNER" -c "git clone '${REPO_URL}' '${tmpdir}/spider'" >&2 || die "Unable to clone repository into ${tmpdir}/spider"
 
-        su - "$OWNER" -c "cd '${tmpdir}/spider' && git fetch --all --tags --prune"
+        su - "$OWNER" -c "cd '${tmpdir}/spider' && git fetch --all --tags --prune" >&2
 
         # Robust branch checkout:
-        su - "$OWNER" -c "cd '${tmpdir}/spider' && (git checkout '${BRANCH}' || git checkout -B '${BRANCH}' 'origin/${BRANCH}')"
+        su - "$OWNER" -c "cd '${tmpdir}/spider' && (git checkout '${BRANCH}' || git checkout -B '${BRANCH}' 'origin/${BRANCH}')" >&2
 
         echo "$tmpdir"
 }
