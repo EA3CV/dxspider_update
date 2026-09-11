@@ -7,8 +7,8 @@
 # By Kin, EA3CV
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.6.7
-# Date 20260202
+# Version 0.6.8
+# Date 20260911
 #
 # Notes:
 # - Keeps original backup/restore functionality in /home/spider.backup
@@ -168,7 +168,7 @@ install_package_CentOS_7()
         echo -e "Starting Installation Dxspider Cluster"
         echo -e " "
         yum check-update ; yum -y update
-        yum -y install perl git gcc make perl-TimeDate perl-Time-HiRes perl-Digest-SHA1 perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-Digest-SHA perl-IO-Compress curl libnet-cidr-lite-perl
+        yum -y install perl git gcc make perl-TimeDate perl-Time-HiRes perl-Digest-SHA1 perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-Digest-SHA perl-IO-Compress curl libnet-cidr-lite-perl perl-DBI perl-DBD-SQLite
         cpanm install Curses || true
 }
 
@@ -184,7 +184,7 @@ install_epel_8()
 install_package_CentOS_8()
 {
         dnf check-update ; dnf -y update
-        dnf -y install perl git gcc make perl-TimeDate perl-Time-HiRes perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-IO-Compress perl-Digest-SHA perl-Net-CIDR-Lite curl libnet-cidr-lite-perl || true
+        dnf -y install perl git gcc make perl-TimeDate perl-Time-HiRes perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-IO-Compress perl-Digest-SHA perl-Net-CIDR-Lite curl libnet-cidr-lite-perl perl-DBI perl-DBD-SQLite || true
 }
 
 install_package_debian()
@@ -192,7 +192,14 @@ install_package_debian()
         echo -e "Starting Installation Dxspider Cluster"
         echo -e " "
         apt-get update ; apt-get -y upgrade
-        apt-get -y install perl libtimedate-perl libnet-telnet-perl libcurses-perl libdigest-sha-perl libdata-dumper-simple-perl git libjson-perl libmojolicious-perl libdata-structure-util-perl libmath-round-perl libev-perl libjson-xs-perl build-essential procps libnet-cidr-lite-perl curl rsync || true
+        apt-get -y install perl libtimedate-perl libnet-telnet-perl libcurses-perl libdigest-sha-perl libdata-dumper-simple-perl git libjson-perl libmojolicious-perl libdata-structure-util-perl libmath-round-perl libev-perl libjson-xs-perl build-essential procps libnet-cidr-lite-perl curl rsync libdbi-perl libdbd-sqlite3-perl || true
+}
+
+ensure_userdsn()
+{
+        local file="${DXSPATH}/local/DXVars.pm"
+        perl -0pi -e 'if (!/^\s*our \$userdsn\s*=/m) { s/\n1;\s*\z/\nour \$userdsn = "dbi:SQLite:dbname=\$root\/local_data\/dxusers.db";\n\n1;\n/ or die "DXVars.pm: final 1; not found\n" }' "$file"
+        chown "${OWNER}:${GROUP}" "$file"
 }
 
 # -----------------------------
@@ -636,6 +643,7 @@ welcome()
 
                 update_spider
                 config_app
+                ensure_userdsn
                 create_service
                 enable_service
 
