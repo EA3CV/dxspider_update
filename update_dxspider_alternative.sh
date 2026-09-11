@@ -7,7 +7,7 @@
 # By Kin, EA3CV
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.6.8
+# Version 0.6.9
 # Date 20260911
 #
 # Notes:
@@ -67,8 +67,11 @@ check_distro() {
 
         arch=$(uname -m)
         kernel=$(uname -r)
+        ID=""
         if [ -f "/etc/os-release" ]; then
-                distroname=$(grep PRETTY_NAME /etc/os-release | sed 's/PRETTY_NAME=//g' | tr -d '="')
+                # shellcheck disable=SC1091
+                . /etc/os-release
+                distroname="${PRETTY_NAME:-${ID:-unknown} ${VERSION_ID:-}}"
         elif [ -f "/etc/redhat-release" ]; then
                 distroname=$(cat /etc/redhat-release)
         else
@@ -142,6 +145,8 @@ check_distro() {
                         elif [ "${distroname}" == "Linux Mint 21.1" ]; then
                                 install_package_debian
                         elif [ "${distroname}" == "Linux Mint 21.3" ]; then
+                                install_package_debian
+                        elif [ "${ID:-}" = "zorin" ]; then
                                 install_package_debian
                 else
                         echo -e " "
