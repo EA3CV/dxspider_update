@@ -6,8 +6,8 @@
 #
 # Fallback (optional): if bundle is missing, it can clone from REPO_URL.
 #
-# Version: 2.4
-# Date: 20260618
+# Version: 2.5
+# Date: 20260911
 
 set -Eeuo pipefail
 
@@ -162,6 +162,7 @@ install_package_CentOS_8() {
     perl-Data-Structure-Util \
     perl-Math-Round \
     perl-EV \
+    perl-DBI perl-DBD-SQLite \
     perl-DBD-MySQL perl-DBD-MariaDB || true
 }
 
@@ -185,6 +186,7 @@ install_package_Rocky_9() {
     perl-Data-Structure-Util \
     perl-Math-Round \
     perl-EV \
+    perl-DBI perl-DBD-SQLite \
     perl-DBD-MySQL perl-DBD-MariaDB || true
 }
 
@@ -213,6 +215,8 @@ install_package_debian() {
     libev-perl \
     libnet-cidr-lite-perl \
     libio-compress-perl \
+    libdbi-perl \
+    libdbd-sqlite3-perl \
     libdbd-mysql-perl \
     libdbd-mariadb-perl
 }
@@ -225,7 +229,7 @@ ensure_cpanm_and_modules() {
   have_cmd cpanm || die "cpanm installation failed."
 
   log "Ensuring Perl modules (cpanm --notest)..."
-  cpanm --notest EV Mojolicious JSON JSON::XS Data::Structure::Util Math::Round || true
+  cpanm --notest EV Mojolicious JSON JSON::XS Data::Structure::Util Math::Round DBI DBD::SQLite || true
 }
 
 # ----------------------------
@@ -460,6 +464,12 @@ configure_dxvars() {
   set_dxvars_field "myqth"     "${MYQTH}"
 }
 
+ensure_userdsn() {
+  local file="${SPIDER_LINK}/local/DXVars.pm"
+  perl -0pi -e 'if (!/^\s*our \$userdsn\s*=/m) { s/\n1;\s*\z/\nour \$userdsn = "dbi:SQLite:dbname=\$root\/local_data\/dxusers.db";\n\n1;\n/ or die "DXVars.pm: final 1; not found\n" }' "$file"
+  chown "${SYSOP_USER}:${SPIDER_GROUP}" "$file"
+}
+
 fix_permissions() {
   log "Fixing ownership/permissions..."
 
@@ -560,6 +570,7 @@ main() {
   ensure_runtime_dirs
   install_local_files
   configure_dxvars
+  ensure_userdsn
   fix_permissions
 
   create_sysop_db
