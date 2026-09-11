@@ -6,7 +6,7 @@
 #
 # Fallback (optional): if bundle is missing, it can clone from REPO_URL.
 #
-# Version: 2.5
+# Version: 2.6
 # Date: 20260911
 
 set -Eeuo pipefail
