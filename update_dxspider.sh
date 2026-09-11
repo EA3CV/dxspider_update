@@ -7,8 +7,8 @@
 # Create By Kin, EA3CV and based on the code of Yiannis Panagou, SV5FRI
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.6.4
-# Date 20260831
+# Version 0.6.5
+# Date 20260911
 #
 
 set -Eeuo pipefail
@@ -317,7 +317,7 @@ install_package_CentOS_7()
 {
         echo -e "Starting Installation Dxspider Cluster"
         echo -e " "
-        yum -y install perl git gcc make rsync perl-TimeDate perl-Time-HiRes perl-Digest-SHA1 perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-Digest-SHA perl-IO-Compress curl libnet-cidr-lite-perl
+        yum -y install perl git gcc make rsync perl-TimeDate perl-Time-HiRes perl-Digest-SHA1 perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-Digest-SHA perl-IO-Compress curl libnet-cidr-lite-perl perl-DBI perl-DBD-SQLite
         command -v cpanm >/dev/null 2>&1 && cpanm Curses || true
 }
 
@@ -334,7 +334,7 @@ install_epel_8()
 # Install extra packages for CentOS 8.x
 install_package_CentOS_8()
 {
-        dnf -y install perl git gcc make rsync perl-TimeDate perl-Time-HiRes perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-IO-Compress perl-Digest-SHA perl-Net-CIDR-Lite curl libnet-cidr-lite-perl
+        dnf -y install perl git gcc make rsync perl-TimeDate perl-Time-HiRes perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-IO-Compress perl-Digest-SHA perl-Net-CIDR-Lite curl libnet-cidr-lite-perl perl-DBI perl-DBD-SQLite
 }
 
 ## Debian & raspbian
@@ -344,7 +344,14 @@ install_package_debian()
         echo -e "Starting Installation Dxspider Cluster"
         echo -e " "
         apt-get update
-        apt-get -y install perl rsync libtimedate-perl libnet-telnet-perl libcurses-perl libdigest-sha-perl libdata-dumper-simple-perl git libjson-perl libmojolicious-perl  libdata-structure-util-perl libmath-round-perl libev-perl libjson-xs-perl build-essential procps libnet-cidr-lite-perl curl
+        apt-get -y install perl rsync libtimedate-perl libnet-telnet-perl libcurses-perl libdigest-sha-perl libdata-dumper-simple-perl git libjson-perl libmojolicious-perl  libdata-structure-util-perl libmath-round-perl libev-perl libjson-xs-perl build-essential procps libnet-cidr-lite-perl curl libdbi-perl libdbd-sqlite3-perl
+}
+
+ensure_userdsn()
+{
+        local file="${DXSPATH}/local/DXVars.pm"
+        perl -0pi -e 'if (!/^\s*our \$userdsn\s*=/m) { s/\n1;\s*\z/\nour \$userdsn = "dbi:SQLite:dbname=\$root\/local_data\/dxusers.db";\n\n1;\n/ or die "DXVars.pm: final 1; not found\n" }' "$file"
+        chown "${OWNER}:${GROUP}" "$file"
 }
 
 # Enter CallSign for cluster
@@ -590,7 +597,7 @@ update_spider()
 
         # Perl deps (best effort)
         curl -fsSL https://cpanmin.us | perl - App::cpanminus || true
-        cpanm EV Mojolicious JSON JSON::XS Data::Structure::Util Math::Round || true
+        cpanm EV Mojolicious JSON JSON::XS Data::Structure::Util Math::Round DBI DBD::SQLite || true
 
         echo -e " "
 }
@@ -642,6 +649,7 @@ welcome()
 
                 update_spider
                 config_app
+                ensure_userdsn
                 create_service
                 enable_service
 
