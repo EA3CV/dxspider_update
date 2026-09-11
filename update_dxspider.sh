@@ -7,7 +7,7 @@
 # Create By Kin, EA3CV and based on the code of Yiannis Panagou, SV5FRI
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.6.5
+# Version 0.6.6
 # Date 20260911
 #
 
@@ -106,7 +106,7 @@ check_distro() {
         echo -e " "
 
         case "${distro_id}:${version_id}" in
-                debian:*|raspbian:*|ubuntu:*|linuxmint:*)
+                debian:*|raspbian:*|ubuntu:*|linuxmint:*|zorin:*)
                         install_package_debian
                         ;;
                 centos:7*|rhel:7*)
