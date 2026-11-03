@@ -7,7 +7,7 @@
 # By Kin, EA3CV
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.6.10
+# Version 0.6.11
 # Date 20261103
 #
 # Notes:
@@ -66,6 +66,7 @@ check_run_user()
 normalize_distro() {
     local name="$1" version="$2" major
     major="${version%%.*}"
+    if [ "$name" = zorin ]; then printf "zorin\n"; return 0; fi
     [[ "$major" =~ ^[0-9]+$ ]] || return 1
     case "$name" in
         ubuntu)          printf 'Ubuntu %s\n' "$major" ;;
@@ -99,22 +100,27 @@ check_distro() {
     ' "$distro_file")
     [ -n "$actions" ] || die "Unsupported distribution: $distro_key"
 
+    IFS=';' read -r -a action_list <<< "$actions"
+    for action in "${action_list[@]}"; do
+        action="${action#"${action%%[![:space:]]*}"}"
+        action="${action%"${action##*[![:space:]]}"}"
+        case "$action" in
+            install_epel_8|install_package_CentOS_8|install_package_debian|install_epel_9|install_package_Rocky_9)
+                declare -F "$action" >/dev/null || die "Action $action is not implemented in this script" ;;
+            *) die "Invalid action in $distro_file: $action" ;;
+        esac
+    done
+
     echo "Detected distribution: $distro_id $distro_version"
     echo "Matched distribution: $distro_key"
     echo "Package actions: $actions"
     read -n 1 -s -r -p $'Press any key to continue...'
     echo
 
-    IFS=';' read -r -a action_list <<< "$actions"
     for action in "${action_list[@]}"; do
         action="${action#"${action%%[![:space:]]*}"}"
         action="${action%"${action##*[![:space:]]}"}"
-        case "$action" in
-            install_epel_7|install_epel_8|install_package_CentOS_7|install_package_CentOS_8|install_package_debian|install_epel_9|install_package_Rocky_9)
-                declare -F "$action" >/dev/null || die "Action $action is not implemented in this script"
-                "$action" ;;
-            *) die "Invalid action in $distro_file: $action" ;;
-        esac
+        "$action"
     done
 }
 
@@ -122,6 +128,36 @@ check_distro() {
 # -----------------------------
 # Install packages (kept as original)
 # -----------------------------
+# Install distro packages first; use CPAN only for modules still unavailable.
+ensure_extra_perl_modules()
+{
+        local module package
+        local -a missing=()
+        local -a modules=(DBI DBD::SQLite Email::Sender IO::Pty)
+        for module in "${modules[@]}"; do
+                if ! perl -M"$module" -e 1 >/dev/null 2>&1; then
+                        missing+=("$module")
+                fi
+        done
+        [ "${#missing[@]}" -eq 0 ] && return 0
+
+        echo "Missing Perl modules: ${missing[*]}; attempting CPAN fallback."
+        if ! command -v cpanm >/dev/null 2>&1; then
+                if command -v apt-get >/dev/null 2>&1; then
+                        apt-get -y install cpanminus || true
+                elif command -v dnf >/dev/null 2>&1; then
+                        dnf -y install perl-App-cpanminus || true
+                fi
+        fi
+        if ! command -v cpanm >/dev/null 2>&1; then
+                die "cpanm is unavailable; cannot install missing Perl modules: ${missing[*]}"
+        fi
+        for module in "${missing[@]}"; do
+                cpanm --notest "$module" || die "CPAN installation failed: $module"
+                perl -M"$module" -e 1 >/dev/null 2>&1 || die "Perl module unavailable after installation: $module"
+        done
+}
+
 install_epel_7()
 {
         yum check-update ; yum -y update
@@ -150,6 +186,21 @@ install_package_CentOS_8()
 {
         dnf check-update ; dnf -y update
         dnf -y install perl git gcc make perl-TimeDate perl-Time-HiRes perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-IO-Compress perl-Digest-SHA perl-Net-CIDR-Lite curl libnet-cidr-lite-perl perl-DBI perl-DBD-SQLite || true
+        dnf -y install perl-DBI perl-DBD-SQLite perl-Email-Sender perl-IO-Tty || true
+        ensure_extra_perl_modules
+}
+
+# Rocky Linux 9 / AlmaLinux 9 (Fedora uses package action only).
+install_epel_9()
+{
+        dnf -y install epel-release
+}
+
+install_package_Rocky_9()
+{
+        dnf -y install perl git gcc make rsync perl-TimeDate perl-Time-HiRes perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-IO-Compress perl-Digest-SHA perl-Net-CIDR-Lite curl perl-DBI perl-DBD-SQLite
+        dnf -y install perl-DBI perl-DBD-SQLite perl-Email-Sender perl-IO-Tty || true
+        ensure_extra_perl_modules
 }
 
 install_package_debian()
@@ -158,6 +209,8 @@ install_package_debian()
         echo -e " "
         apt-get update ; apt-get -y upgrade
         apt-get -y install perl libtimedate-perl libnet-telnet-perl libcurses-perl libdigest-sha-perl libdata-dumper-simple-perl git libjson-perl libmojolicious-perl libdata-structure-util-perl libmath-round-perl libev-perl libjson-xs-perl build-essential procps libnet-cidr-lite-perl curl rsync libdbi-perl libdbd-sqlite3-perl || true
+        apt-get -y install libdbi-perl libdbd-sqlite3-perl libemail-sender-perl libio-pty-perl || true
+        ensure_extra_perl_modules
 }
 
 ensure_userdsn()
