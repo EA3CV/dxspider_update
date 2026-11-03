@@ -7,8 +7,8 @@
 # Create By Kin, EA3CV and based on the code of Yiannis Panagou, SV5FRI
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.6.6
-# Date 20260911
+# Version 0.6.7
+# Date 20261103
 #
 
 set -Eeuo pipefail
@@ -75,59 +75,78 @@ backup()
                 cp -a "${DXSPATH}" "${BACKUP_DIR}/spider"
         fi
 }
-# Function Check Distribution and Version
-check_distro() {
+# Distribution lookup: name + major version only.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-        arch=$(uname -m)
-        kernel=$(uname -r)
-        if [ -f "/etc/os-release" ]; then
-                # shellcheck disable=SC1091
-                . /etc/os-release
-                distroname="${PRETTY_NAME:-${ID:-unknown} ${VERSION_ID:-}}"
-                distro_id="${ID:-unknown}"
-                version_id="${VERSION_ID:-}"
-        elif [ -f "/etc/redhat-release" ]; then
-                distroname=$(cat /etc/redhat-release)
-                distro_id="rhel"
-                version_id=""
-        else
-                distroname="$(uname -s) $(uname -r)"
-                distro_id="unknown"
-                version_id=""
-        fi
-
-        echo -e " "
-        echo -e "==============================================================="
-        echo -e "      Your OS distribution is ${distroname}"
-        echo -e "=============================================================== "
-        echo -e " "
-        echo -e " "
-        read -n 1 -s -r -p $'Press any key to continue...'
-        echo -e " "
-
-        case "${distro_id}:${version_id}" in
-                debian:*|raspbian:*|ubuntu:*|linuxmint:*|zorin:*)
-                        install_package_debian
-                        ;;
-                centos:7*|rhel:7*)
-                        install_epel_7
-                        install_package_CentOS_7
-                        ;;
-                centos:8*|rhel:8*|rocky:8*|fedora:*)
-                        install_epel_8
-                        install_package_CentOS_8
-                        ;;
-                *)
-                        echo -e " "
-                        echo -e "==============================================================="
-                        echo -e "      Your OS distribution ${distroname} is not supported"
-                        echo -e "=============================================================== "
-                        echo -e " "
-                        echo -e " "
-                        exit 1
-                        ;;
+normalize_distro()
+{
+        local distro_id="$1" version="$2" major
+        major="${version%%.*}"
+        case "$distro_id" in
+                zorin) printf 'zorin\n'; return 0 ;;
+        esac
+        [[ "$major" =~ ^[0-9]+$ ]] || return 1
+        case "$distro_id" in
+                ubuntu) printf 'Ubuntu %s\n' "$major" ;;
+                linuxmint) printf 'Linux Mint %s\n' "$major" ;;
+                debian) printf 'Debian GNU/Linux %s\n' "$major" ;;
+                raspbian) printf 'Raspbian GNU/Linux %s\n' "$major" ;;
+                centos) printf 'CentOS Linux %s\n' "$major" ;;
+                rocky) printf 'Rocky Linux %s\n' "$major" ;;
+                almalinux) printf 'AlmaLinux %s\n' "$major" ;;
+                fedora) printf 'Fedora Linux %s\n' "$major" ;;
+                *) return 1 ;;
         esac
 }
+
+check_distro()
+{
+        local distro_id="" version_id="" distroname="" distro_key="" actions="" action=""
+        local distro_file="${SCRIPT_DIR}/distro_actions.conf"
+        local -a action_list=()
+
+        if [ -f /etc/os-release ]; then
+                # shellcheck disable=SC1091
+                . /etc/os-release
+                distro_id="${ID:-}"
+                version_id="${VERSION_ID:-}"
+                distroname="${PRETTY_NAME:-${ID:-unknown} ${VERSION_ID:-}}"
+        elif [ -f /etc/redhat-release ]; then
+                distroname="$(cat /etc/redhat-release)"
+                die "Missing /etc/os-release; cannot safely determine distribution ID/version: ${distroname}"
+        else
+                die "Missing /etc/os-release"
+        fi
+
+        distro_key="$(normalize_distro "$distro_id" "$version_id")" || die "Unsupported distribution: ${distroname}"
+        [ -f "$distro_file" ] || die "Missing distribution actions: $distro_file"
+        actions="$(awk -F, -v key="$distro_key" '$1 == key {sub(/^[[:space:]]+/, "", $2); sub(/[[:space:]]+$/, "", $2); print $2; exit}' "$distro_file")"
+        [ -n "$actions" ] || die "Unsupported distribution: ${distroname} (normalized: ${distro_key})"
+
+        IFS=';' read -r -a action_list <<< "$actions"
+        # Validate every action before installing any packages.
+        for action in "${action_list[@]}"; do
+                action="${action#"${action%%[![:space:]]*}"}"
+                action="${action%"${action##*[![:space:]]}"}"
+                case "$action" in
+                        install_epel_7|install_epel_8|install_epel_9|install_package_CentOS_7|install_package_CentOS_8|install_package_Rocky_9|install_package_debian)
+                                declare -F "$action" >/dev/null || die "Package action not implemented: $action" ;;
+                        *) die "Invalid package action: $action" ;;
+                esac
+        done
+
+        echo "Detected OS: ${distroname}"
+        echo "Matched OS: ${distro_key}"
+        echo "Package actions: ${actions}"
+        read -n 1 -s -r -p $'Press any key to continue...'
+        echo
+        for action in "${action_list[@]}"; do
+                action="${action#"${action%%[![:space:]]*}"}"
+                action="${action%"${action##*[![:space:]]}"}"
+                "$action"
+        done
+}
+
 # Check the script is being run by root user
 check_run_user()
 {
