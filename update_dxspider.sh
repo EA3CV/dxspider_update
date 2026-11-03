@@ -7,7 +7,7 @@
 # Create By Kin, EA3CV and based on the code of Yiannis Panagou, SV5FRI
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.6.7
+# Version 0.6.8
 # Date 20261103
 #
 
@@ -129,7 +129,7 @@ check_distro()
                 action="${action#"${action%%[![:space:]]*}"}"
                 action="${action%"${action##*[![:space:]]}"}"
                 case "$action" in
-                        install_epel_7|install_epel_8|install_epel_9|install_package_CentOS_7|install_package_CentOS_8|install_package_Rocky_9|install_package_debian)
+                        install_epel_8|install_epel_9|install_package_CentOS_8|install_package_Rocky_9|install_package_debian)
                                 declare -F "$action" >/dev/null || die "Package action not implemented: $action" ;;
                         *) die "Invalid package action: $action" ;;
                 esac
@@ -326,6 +326,36 @@ enable_service()
 
 ## CentOS 7.x
 #
+# Install distro packages first; use CPAN only for modules still unavailable.
+ensure_extra_perl_modules()
+{
+        local module package
+        local -a missing=()
+        local -a modules=(DBI DBD::SQLite Email::Sender IO::Pty)
+        for module in "${modules[@]}"; do
+                if ! perl -M"$module" -e 1 >/dev/null 2>&1; then
+                        missing+=("$module")
+                fi
+        done
+        [ "${#missing[@]}" -eq 0 ] && return 0
+
+        echo "Missing Perl modules: ${missing[*]}; attempting CPAN fallback."
+        if ! command -v cpanm >/dev/null 2>&1; then
+                if command -v apt-get >/dev/null 2>&1; then
+                        apt-get -y install cpanminus || true
+                elif command -v dnf >/dev/null 2>&1; then
+                        dnf -y install perl-App-cpanminus || true
+                fi
+        fi
+        if ! command -v cpanm >/dev/null 2>&1; then
+                die "cpanm is unavailable; cannot install missing Perl modules: ${missing[*]}"
+        fi
+        for module in "${missing[@]}"; do
+                cpanm --notest "$module" || die "CPAN installation failed: $module"
+                perl -M"$module" -e 1 >/dev/null 2>&1 || die "Perl module unavailable after installation: $module"
+        done
+}
+
 install_epel_7()
 {
         yum -y install epel-release || true
@@ -354,16 +384,33 @@ install_epel_8()
 install_package_CentOS_8()
 {
         dnf -y install perl git gcc make rsync perl-TimeDate perl-Time-HiRes perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-IO-Compress perl-Digest-SHA perl-Net-CIDR-Lite curl libnet-cidr-lite-perl perl-DBI perl-DBD-SQLite
+        dnf -y install perl-DBI perl-DBD-SQLite perl-Email-Sender perl-IO-Tty || true
+        ensure_extra_perl_modules
 }
 
 ## Debian & raspbian
 #
+# Rocky Linux 9 / AlmaLinux 9 (Fedora uses package action only).
+install_epel_9()
+{
+        dnf -y install epel-release
+}
+
+install_package_Rocky_9()
+{
+        dnf -y install perl git gcc make rsync perl-TimeDate perl-Time-HiRes perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-IO-Compress perl-Digest-SHA perl-Net-CIDR-Lite curl perl-DBI perl-DBD-SQLite
+        dnf -y install perl-DBI perl-DBD-SQLite perl-Email-Sender perl-IO-Tty || true
+        ensure_extra_perl_modules
+}
+
 install_package_debian()
 {
         echo -e "Starting Installation Dxspider Cluster"
         echo -e " "
         apt-get update
         apt-get -y install perl rsync libtimedate-perl libnet-telnet-perl libcurses-perl libdigest-sha-perl libdata-dumper-simple-perl git libjson-perl libmojolicious-perl  libdata-structure-util-perl libmath-round-perl libev-perl libjson-xs-perl build-essential procps libnet-cidr-lite-perl curl libdbi-perl libdbd-sqlite3-perl
+        apt-get -y install libdbi-perl libdbd-sqlite3-perl libemail-sender-perl libio-pty-perl || true
+        ensure_extra_perl_modules
 }
 
 ensure_userdsn()
