@@ -7,8 +7,8 @@
 # By Kin, EA3CV
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.6.9
-# Date 20260911
+# Version 0.6.10
+# Date 20261103
 #
 # Notes:
 # - Keeps original backup/restore functionality in /home/spider.backup
@@ -61,104 +61,64 @@ check_run_user()
 }
 
 # -----------------------------
-# Detect distro (kept as original)
+# Detect distro using normalized major version and distro_actions.conf
 # -----------------------------
-check_distro() {
-
-        arch=$(uname -m)
-        kernel=$(uname -r)
-        ID=""
-        if [ -f "/etc/os-release" ]; then
-                # shellcheck disable=SC1091
-                . /etc/os-release
-                distroname="${PRETTY_NAME:-${ID:-unknown} ${VERSION_ID:-}}"
-        elif [ -f "/etc/redhat-release" ]; then
-                distroname=$(cat /etc/redhat-release)
-        else
-                distroname="$(uname -s) $(uname -r)"
-        fi
-
-        echo -e " "
-        echo -e "==============================================================="
-        echo -e "      Your OS distribution is ${distroname}"
-        echo -e "=============================================================== "
-        echo -e " "
-        echo -e " "
-        read -n 1 -s -r -p $'Press any key to continue...'
-        echo -e " "
-
-        if [ "${distroname}" == "CentOS Linux 7 (Core)" ]; then
-                                install_epel_7
-                                install_package_CentOS_7
-                        elif [ "${distroname}" == "CentOS Linux 8 (Core)" ]; then
-                                install_epel_8
-                                install_package_CentOS_8
-                        elif [ "${distroname}" == "Rocky Linux 8.5 (Green Obsidian)" ]; then
-                                install_epel_8
-                                install_package_CentOS_8
-                        elif [ "${distroname}" == "Raspbian GNU/Linux 8 (jessie)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Raspbian GNU/Linux 9 (stretch)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Debian GNU/Linux 9 (stretch)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Raspbian GNU/Linux 10 (buster)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Debian GNU/Linux 10 (buster)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Raspbian GNU/Linux 11 (bullseye)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Raspbian GNU/Linux 13 (trixie)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Raspbian GNU/Linux 12 (bookworm)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Debian GNU/Linux 11 (bullseye)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Debian GNU/Linux 12 (bookworm)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Debian GNU/Linux 13 (trixie)" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 20.04.6 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 22.04 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 22.04.1 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 22.04.2 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 22.04.3 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 22.04.4 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 22.04.5 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Ubuntu 24.04.2 LTS" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Fedora Linux 39 (Server Edition)" ]; then
-                                install_epel_8
-                                install_package_CentOS_8
-                        elif [ "${distroname}" == "Fedora Linux 39 (Workstation Edition)" ]; then
-                                install_epel_8
-                                install_package_CentOS_8
-                        elif [ "${distroname}" == "Debian GNU/Linux bookworm/sid" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Linux Mint 21.1" ]; then
-                                install_package_debian
-                        elif [ "${distroname}" == "Linux Mint 21.3" ]; then
-                                install_package_debian
-                        elif [ "${ID:-}" = "zorin" ]; then
-                                install_package_debian
-                else
-                        echo -e " "
-                        echo -e "==============================================================="
-                        echo -e "      Your OS distribution ${distroname} is not supported"
-                        echo -e "=============================================================== "
-                        echo -e " "
-                        echo -e " "
-                        exit 1
-        fi
+normalize_distro() {
+    local name="$1" version="$2" major
+    major="${version%%.*}"
+    [[ "$major" =~ ^[0-9]+$ ]] || return 1
+    case "$name" in
+        ubuntu)          printf 'Ubuntu %s\n' "$major" ;;
+        linuxmint)       printf 'Linux Mint %s\n' "$major" ;;
+        debian)          printf 'Debian GNU/Linux %s\n' "$major" ;;
+        raspbian)        printf 'Raspbian GNU/Linux %s\n' "$major" ;;
+        centos)          printf 'CentOS Linux %s\n' "$major" ;;
+        rocky)           printf 'Rocky Linux %s\n' "$major" ;;
+        almalinux)       printf 'AlmaLinux %s\n' "$major" ;;
+        fedora)          printf 'Fedora Linux %s\n' "$major" ;;
+        zorin)           printf 'zorin\n' ;;
+        *) return 1 ;;
+    esac
 }
 
+check_distro() {
+    local distro_id="" distro_version="" distro_key="" actions="" action=""
+    local distro_file="${SCRIPT_DIR}/distro_actions.conf"
+    local -a action_list=()
+
+    [ -f /etc/os-release ] || die "Missing /etc/os-release"
+    # Read ID and VERSION_ID without executing distro-supplied shell contents.
+    distro_id=$( . /etc/os-release; printf '%s' "${ID:-}" )
+    distro_version=$( . /etc/os-release; printf '%s' "${VERSION_ID:-}" )
+    [ -n "$distro_id" ] || die "Missing OS ID"
+    distro_key=$(normalize_distro "$distro_id" "$distro_version") || die "Unsupported distribution: $distro_id $distro_version"
+    [ -f "$distro_file" ] || die "Missing distribution actions: $distro_file"
+
+    actions=$(awk -F, -v key="$distro_key" '
+        $1 == key { sub(/^[[:space:]]+/, "", $2); sub(/[[:space:]]+$/, "", $2); print $2; exit }
+    ' "$distro_file")
+    [ -n "$actions" ] || die "Unsupported distribution: $distro_key"
+
+    echo "Detected distribution: $distro_id $distro_version"
+    echo "Matched distribution: $distro_key"
+    echo "Package actions: $actions"
+    read -n 1 -s -r -p $'Press any key to continue...'
+    echo
+
+    IFS=';' read -r -a action_list <<< "$actions"
+    for action in "${action_list[@]}"; do
+        action="${action#"${action%%[![:space:]]*}"}"
+        action="${action%"${action##*[![:space:]]}"}"
+        case "$action" in
+            install_epel_7|install_epel_8|install_package_CentOS_7|install_package_CentOS_8|install_package_debian|install_epel_9|install_package_Rocky_9)
+                declare -F "$action" >/dev/null || die "Action $action is not implemented in this script"
+                "$action" ;;
+            *) die "Invalid action in $distro_file: $action" ;;
+        esac
+    done
+}
+
+# -----------------------------
 # -----------------------------
 # Install packages (kept as original)
 # -----------------------------
