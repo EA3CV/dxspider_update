@@ -6,8 +6,8 @@
 #
 # Fallback (optional): if bundle is missing, it can clone from REPO_URL.
 #
-# Version: 2.6
-# Date: 20260911
+# Version: 2.7
+# Date: 20261103
 
 set -Eeuo pipefail
 
@@ -71,26 +71,35 @@ load_distro_actions() {
   done < "${CONF_FILE}"
 }
 
+normalize_distro() {
+  local id="$1" version="$2" major="${2%%.*}"
+  case "$id" in
+    zorin) printf 'zorin\n'; return 0 ;;
+  esac
+  [[ "$major" =~ ^[0-9]+$ ]] || return 1
+  case "$id" in
+    ubuntu) printf 'Ubuntu %s\n' "$major" ;;
+    linuxmint) printf 'Linux Mint %s\n' "$major" ;;
+    debian) printf 'Debian GNU/Linux %s\n' "$major" ;;
+    raspbian) printf 'Raspbian GNU/Linux %s\n' "$major" ;;
+    centos) printf 'CentOS Linux %s\n' "$major" ;;
+    rocky) printf 'Rocky Linux %s\n' "$major" ;;
+    almalinux) printf 'AlmaLinux %s\n' "$major" ;;
+    fedora) printf 'Fedora Linux %s\n' "$major" ;;
+    *) return 1 ;;
+  esac
+}
+
 get_os_keys() {
-  local pretty="" id="" version="" like=""
+  local id="" version=""
   if [[ -r /etc/os-release ]]; then
-    # shellcheck disable=SC1091
     . /etc/os-release
-    pretty="${PRETTY_NAME:-}"
     id="${ID:-}"
     version="${VERSION_ID:-}"
-    like="${ID_LIKE:-}"
-  elif [[ -r /etc/redhat-release ]]; then
-    pretty="$(cat /etc/redhat-release)"
   else
-    pretty="$(uname -s) $(uname -r)"
+    die "Missing /etc/os-release"
   fi
-
-  [[ -n "$pretty" ]] && echo "$pretty"
-  [[ -n "$id" && -n "$version" ]] && echo "${id}:${version}"
-  [[ -n "$id" && -n "$version" ]] && echo "${id} ${version}"
-  [[ -n "$id" ]] && echo "${id}"
-  [[ -n "$like" ]] && echo "${like}"
+  normalize_distro "$id" "$version" || die "Unsupported distribution: $id $version"
 }
 
 run_actions_for_distro() {
@@ -111,16 +120,21 @@ run_actions_for_distro() {
   log "Executing actions: ${actions}"
   echo
 
+  local -a steps=() validated=()
+  local raw step
   IFS=';' read -ra steps <<< "${actions}"
+  # Validate every action before any package installation starts.
   for raw in "${steps[@]}"; do
-    local step
     step="$(echo "$raw" | xargs)"
-    [[ -n "$step" ]] || continue
-
-    if [[ "$step" =~ [[:space:]] ]]; then
-      die "Invalid step '${step}' in ${CONF_FILE} (spaces not allowed)."
-    fi
-    declare -F "$step" >/dev/null 2>&1 || die "Step '${step}' is not a known function."
+    [[ -n "$step" && "$step" =~ ^[a-zA-Z_][a-zA-Z_0-9]*$ ]] || die "Invalid step '$step' in ${CONF_FILE}."
+    case "$step" in
+      install_epel_8|install_epel_9|install_package_CentOS_8|install_package_Rocky_9|install_package_debian) ;;
+      *) die "Unknown action '$step' in ${CONF_FILE}." ;;
+    esac
+    declare -F "$step" >/dev/null 2>&1 || die "Step '$step' is not implemented."
+    validated+=("$step")
+  done
+  for step in "${validated[@]}"; do
     "$step"
   done
 }
@@ -221,15 +235,38 @@ install_package_debian() {
     libdbd-mariadb-perl
 }
 
-ensure_cpanm_and_modules() {
-  if ! have_cmd cpanm; then
-    log "cpanm not found. Bootstrapping via curl..."
-    curl -fsSL https://cpanmin.us | perl - App::cpanminus
+install_optional_perl_packages() {
+  local package
+  local -a packages=()
+  if have_cmd apt-get; then
+    packages=(libdbi-perl libdbd-sqlite3-perl libemail-sender-perl libio-pty-perl)
+    for package in "${packages[@]}"; do apt-get install -y "$package" || log "Native package unavailable: $package"; done
+  elif have_cmd dnf; then
+    packages=(perl-DBI perl-DBD-SQLite perl-Email-Sender perl-IO-Tty)
+    for package in "${packages[@]}"; do dnf -y install "$package" || log "Native package unavailable: $package"; done
   fi
-  have_cmd cpanm || die "cpanm installation failed."
+}
 
-  log "Ensuring Perl modules (cpanm --notest)..."
-  cpanm --notest EV Mojolicious JSON JSON::XS Data::Structure::Util Math::Round DBI DBD::SQLite || true
+ensure_cpanm_and_modules() {
+  local module
+  local -a required=(EV Mojolicious JSON JSON::XS Data::Structure::Util Math::Round DBI DBD::SQLite Email::Sender IO::Pty)
+  for module in "${required[@]}"; do
+    if perl -M"$module" -e 1 >/dev/null 2>&1; then
+      continue
+    fi
+    if ! have_cmd cpanm; then
+      log "cpanm not found. Installing it for missing Perl dependencies..."
+      if have_cmd apt-get; then apt-get install -y cpanminus || true
+      elif have_cmd dnf; then dnf -y install perl-App-cpanminus || true; fi
+    fi
+    if ! have_cmd cpanm; then
+      curl -fsSL https://cpanmin.us | perl - App::cpanminus || die "Cannot install cpanm"
+    fi
+    have_cmd cpanm || die "cpanm is unavailable"
+    log "Installing missing Perl module: $module"
+    cpanm --notest "$module" || die "Failed to install Perl module $module"
+    perl -M"$module" -e 1 >/dev/null 2>&1 || die "Perl module still unavailable: $module"
+  done
 }
 
 # ----------------------------
@@ -564,6 +601,7 @@ main() {
   ensure_user
   prepare_paths
 
+  install_optional_perl_packages
   ensure_cpanm_and_modules
   git_install_spider
 
