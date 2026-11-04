@@ -146,29 +146,4 @@ chmod a+x update_dxspider.sh
 
 ---
 
-# To use `update_dxspider_alternative.sh`
-
-## Download script
-
-```bash
-wget https://github.com/EA3CV/dxspider_update/archive/refs/heads/main.zip -O update_dxspider_alternative.zip
-```
-
-Must be run as root user.
-
-## Uncompress & change permissions
-
-```bash
-unzip update_dxspider_alternative.zip
-cd dxspider_update-main
-chmod a+x update_dxspider_alternative.sh
-```
-
-## Run script
-
-```bash
-./update_dxspider_alternative.sh
-```
-
----
 
