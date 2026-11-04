@@ -116,33 +116,29 @@ chmod a+x update_dxspider.sh
 
 ## Script has been tested on the following Operating Systems (Linux Distributions)
 
-- CentOS Linux 7 (Core)
-- CentOS Linux 8 (Core)
-- Debian GNU/Linux 9 (stretch)
-- Debian GNU/Linux 10 (buster)
-- Debian GNU/Linux 11 (bullseye)
-- Debian GNU/Linux 12 (bookworm)
-- Debian GNU/Linux 13 (trixie)
-- Debian GNU/Linux bookworm/sid
-- Fedora Linux 39 (Server Edition)
-- Fedora Linux 39 (Workstation Edition)
-- Linux Mint 21.1
-- Linux Mint 21.3
-- Raspbian GNU/Linux 9 (stretch)
-- Raspbian GNU/Linux 10 (buster)
-- Raspbian GNU/Linux 11 (bullseye)
-- Raspbian GNU/Linux 12 (bookworm)
-- Raspbian GNU/Linux 13 (trixie)
-- Ubuntu 20.04.6 LTS
-- Ubuntu 22.04 LTS
-- Ubuntu 22.04.1 LTS
-- Ubuntu 22.04.2 LTS
-- Ubuntu 22.04.3 LTS
-- Ubuntu 22.04.4 LTS
-- Ubuntu 22.04.5 LTS
-- Ubuntu 24.04.2 LTS
-- Ubuntu 26.04 LTS
-- Rocky Linux 8.5 (Green Obsidian)
+- CentOS Linux 8
+- Rocky Linux 8
+- Rocky Linux 9
+- AlmaLinux 9
+- Raspbian GNU/Linux 9
+- Raspbian GNU/Linux 10
+- Raspbian GNU/Linux 11
+- Raspbian GNU/Linux 12
+- Raspbian GNU/Linux 13
+- Debian GNU/Linux 9
+- Debian GNU/Linux 10
+- Debian GNU/Linux 11
+- Debian GNU/Linux 12
+- Debian GNU/Linux 13
+- Ubuntu 22
+- Ubuntu 24
+- Ubuntu 25
+- Ubuntu 26
+- Fedora Linux 39
+- Fedora Linux 40
+- Fedora Linux 41
+- Linux Mint 21
+- Zorin
 
 ---
 
