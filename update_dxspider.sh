@@ -7,14 +7,15 @@
 # Create By Kin, EA3CV and based on the code of Yiannis Panagou, SV5FRI
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.6.8
-# Date 20261103
+# Version 0.6.17
+# Date 20261118
 #
 
 set -Eeuo pipefail
 
 # --- Defaults (can be overridden via env) ---
 : "${REPO_URL:=git://scm.dxcluster.org/spider}"
+: "${BACKUP_REPO_URL:=https://github.com/EA3CV/dxspider.git}"
 : "${BRANCH:=mojo}"
 : "${BACKUP_DIR:=/home/spider.backup}"
 : "${TMP_BASE:=/tmp}"
@@ -75,7 +76,8 @@ backup()
                 cp -a "${DXSPATH}" "${BACKUP_DIR}/spider"
         fi
 }
-# Distribution lookup: name + major version only.
+# Distribution lookup: one configuration entry per OS family.
+# RPM 8/9 remain separate because their package actions differ.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 normalize_distro()
@@ -83,18 +85,23 @@ normalize_distro()
         local distro_id="$1" version="$2" major
         major="${version%%.*}"
         case "$distro_id" in
-                zorin) printf 'zorin\n'; return 0 ;;
-        esac
-        [[ "$major" =~ ^[0-9]+$ ]] || return 1
-        case "$distro_id" in
-                ubuntu) printf 'Ubuntu %s\n' "$major" ;;
-                linuxmint) printf 'Linux Mint %s\n' "$major" ;;
-                debian) printf 'Debian GNU/Linux %s\n' "$major" ;;
-                raspbian) printf 'Raspbian GNU/Linux %s\n' "$major" ;;
-                centos) printf 'CentOS Linux %s\n' "$major" ;;
-                rocky) printf 'Rocky Linux %s\n' "$major" ;;
-                almalinux) printf 'AlmaLinux %s\n' "$major" ;;
-                fedora) printf 'Fedora Linux %s\n' "$major" ;;
+                ubuntu) printf 'Ubuntu\n' ;;
+                linuxmint) printf 'Linux Mint\n' ;;
+                debian) printf 'Debian GNU/Linux\n' ;;
+                raspbian) printf 'Raspbian GNU/Linux\n' ;;
+                zorin) printf 'zorin\n' ;;
+                fedora) printf 'Fedora Linux\n' ;;
+                centos|rocky|almalinux)
+                        [[ "$major" =~ ^[0-9]+$ ]] || return 1
+                        case "$major" in
+                                8|9) ;;
+                                *) return 1 ;;
+                        esac
+                        case "$distro_id" in
+                                centos) printf 'CentOS Linux %s\n' "$major" ;;
+                                rocky) printf 'Rocky Linux %s\n' "$major" ;;
+                                almalinux) printf 'AlmaLinux %s\n' "$major" ;;
+                        esac ;;
                 *) return 1 ;;
         esac
 }
@@ -120,7 +127,13 @@ check_distro()
 
         distro_key="$(normalize_distro "$distro_id" "$version_id")" || die "Unsupported distribution: ${distroname}"
         [ -f "$distro_file" ] || die "Missing distribution actions: $distro_file"
-        actions="$(awk -F, -v key="$distro_key" '$1 == key {sub(/^[[:space:]]+/, "", $2); sub(/[[:space:]]+$/, "", $2); print $2; exit}' "$distro_file")"
+        # Exact family lookup. The config deliberately contains no minor
+        # versions or release codenames; never use a prefix match here.
+        actions="$(awk -F, -v key="$distro_key" '
+                function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+                /^[[:space:]]*(#|$)/ { next }
+                NF >= 2 && trim($1) == key { print trim($2); exit }
+        ' "$distro_file")"
         [ -n "$actions" ] || die "Unsupported distribution: ${distroname} (normalized: ${distro_key})"
 
         IFS=';' read -r -a action_list <<< "$actions"
@@ -159,11 +172,12 @@ check_run_user()
 # --- NEW: Preflight repo reachable ---
 preflight_repo()
 {
-        echo -e " "
-        echo -e "Checking repository reachability: ${REPO_URL}"
-        if ! su - "$OWNER" -c "git ls-remote '${REPO_URL}' >/dev/null 2>&1"; then
-                die "Repository is unreachable: ${REPO_URL}. Aborting to avoid breaking DXSpider."
+        echo "Checking Dirk repository: ${REPO_URL}"
+        if su - "$OWNER" -c "git ls-remote '${REPO_URL}' 'refs/heads/${BRANCH}'" 2>/dev/null | grep -q .; then
+                return 0
         fi
+        echo "Dirk repository unavailable; checking GitHub backup: ${BACKUP_REPO_URL}"
+        su - "$OWNER" -c "git ls-remote '${BACKUP_REPO_URL}' 'refs/heads/${BRANCH}'" 2>/dev/null | grep -q . || die "Neither repository provides branch ${BRANCH}; aborting before stopping DXSpider"
 }
 
 # --- NEW: clone to temp + checkout branch ---
@@ -184,9 +198,11 @@ clone_to_temp()
         # All progress messages and git output must go to stderr, otherwise
         # tmpdir gets polluted with text and rsync may interpret it as a remote host.
         echo -e "Cloning new DXSpider tree into: ${tmpdir}/spider" >&2
-        su - "$OWNER" -c "git clone '${REPO_URL}' '${tmpdir}/spider'" >&2 || die "Unable to clone repository into ${tmpdir}/spider"
-
-        su - "$OWNER" -c "cd '${tmpdir}/spider' && git fetch --all --tags --prune" >&2
+        if ! su - "$OWNER" -c "git clone --branch '${BRANCH}' '${REPO_URL}' '${tmpdir}/spider'" >&2; then
+                echo "Dirk clone failed; trying GitHub backup: ${BACKUP_REPO_URL}" >&2
+                rm -rf "${tmpdir}/spider"
+                su - "$OWNER" -c "git clone --branch '${BRANCH}' '${BACKUP_REPO_URL}' '${tmpdir}/spider'" >&2 || die "Both repositories failed; existing installation untouched"
+        fi
 
         # Robust branch checkout:
         su - "$OWNER" -c "cd '${tmpdir}/spider' && (git checkout '${BRANCH}' || git checkout -B '${BRANCH}' 'origin/${BRANCH}')" >&2
@@ -326,34 +342,41 @@ enable_service()
 
 ## CentOS 7.x
 #
-# Install distro packages first; use CPAN only for modules still unavailable.
+# Dependency inventory from Guia_DXS_ES / Guide_DXS_EN (DXSpider ea3cv).
+# Validate the full inventory before replacing the running tree. Avoid CPAN
+# installs for modules already supplied by the distribution.
+DXS_REQUIRED_MODULES=(
+        EV Mojolicious JSON JSON::XS Data::Structure::Util Math::Round
+        Net::CIDR::Lite DBI DBD::SQLite Date::Parse HTML::Parser
+        IO::Socket::INET6 Archive::Zip Curses Mail::Internet Digest::SHA
+        LWP::UserAgent LWP::Parallel::UserAgent DB_File IO::Pty
+        Authen::SASL Net::SMTP::SSL Email::Sender
+)
+
 ensure_extra_perl_modules()
 {
-        local module package
+        local module
         local -a missing=()
-        local -a modules=(DBI DBD::SQLite Email::Sender IO::Pty)
-        for module in "${modules[@]}"; do
+        perl -e 'die "Perl >= 5.16.1 required\n" if $] < 5.016001' || die "Perl version is too old"
+        for module in "${DXS_REQUIRED_MODULES[@]}"; do
                 if ! perl -M"$module" -e 1 >/dev/null 2>&1; then
                         missing+=("$module")
                 fi
         done
-        [ "${#missing[@]}" -eq 0 ] && return 0
-
-        echo "Missing Perl modules: ${missing[*]}; attempting CPAN fallback."
-        if ! command -v cpanm >/dev/null 2>&1; then
-                if command -v apt-get >/dev/null 2>&1; then
-                        apt-get -y install cpanminus || true
-                elif command -v dnf >/dev/null 2>&1; then
-                        dnf -y install perl-App-cpanminus || true
-                fi
+        if [ "${#missing[@]}" -gt 0 ]; then
+                log "Missing Perl modules: ${missing[*]}"
+                command -v cpanm >/dev/null 2>&1 || die "cpanm unavailable; install cpanminus and retry"
+                # CPAN fallback only for missing modules; do not suppress failures.
+                for module in "${missing[@]}"; do
+                        log "Installing missing Perl module: $module"
+                        cpanm "$module" || die "CPAN installation failed: $module"
+                done
         fi
-        if ! command -v cpanm >/dev/null 2>&1; then
-                die "cpanm is unavailable; cannot install missing Perl modules: ${missing[*]}"
-        fi
-        for module in "${missing[@]}"; do
-                cpanm --notest "$module" || die "CPAN installation failed: $module"
-                perl -M"$module" -e 1 >/dev/null 2>&1 || die "Perl module unavailable after installation: $module"
+        for module in "${DXS_REQUIRED_MODULES[@]}"; do
+                perl -M"$module" -e 1 >/dev/null 2>&1 || die "Missing required Perl module after installation: $module"
         done
+        perl -MMojolicious -e 'Mojolicious->VERSION(7.26)' >/dev/null 2>&1 || die "Mojolicious >= 7.26 required"
+        log "DXSpider Perl dependency verification: OK"
 }
 
 install_epel_7()
@@ -366,7 +389,7 @@ install_package_CentOS_7()
 {
         echo -e "Starting Installation Dxspider Cluster"
         echo -e " "
-        yum -y install perl git gcc make rsync perl-TimeDate perl-Time-HiRes perl-Digest-SHA1 perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-Digest-SHA perl-IO-Compress curl libnet-cidr-lite-perl perl-DBI perl-DBD-SQLite
+        yum -y install perl git gcc make rsync perl-TimeDate perl-Time-HiRes perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-Digest-SHA perl-IO-Compress curl libnet-cidr-lite-perl perl-DBI perl-DBD-SQLite
         command -v cpanm >/dev/null 2>&1 && cpanm Curses || true
 }
 
@@ -383,9 +406,8 @@ install_epel_8()
 # Install extra packages for CentOS 8.x
 install_package_CentOS_8()
 {
-        dnf -y install perl git gcc make rsync perl-TimeDate perl-Time-HiRes perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-IO-Compress perl-Digest-SHA perl-Net-CIDR-Lite curl libnet-cidr-lite-perl perl-DBI perl-DBD-SQLite
+        dnf -y install perl git gcc make rsync perl-TimeDate perl-Time-HiRes perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-IO-Compress perl-Digest-SHA perl-Net-CIDR-Lite curl libnet-cidr-lite-perl perl-DBI perl-DBD-SQLite perl-App-cpanminus openssl-devel zlib-devel
         dnf -y install perl-DBI perl-DBD-SQLite perl-Email-Sender perl-IO-Tty || true
-        ensure_extra_perl_modules
 }
 
 ## Debian & raspbian
@@ -398,9 +420,8 @@ install_epel_9()
 
 install_package_Rocky_9()
 {
-        dnf -y install perl git gcc make rsync perl-TimeDate perl-Time-HiRes perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-IO-Compress perl-Digest-SHA perl-Net-CIDR-Lite curl perl-DBI perl-DBD-SQLite
+        dnf -y install perl git gcc make rsync perl-TimeDate perl-Time-HiRes perl-Curses perl-Net-Telnet perl-Data-Dumper perl-DB_File perl-ExtUtils-MakeMaker perl-Digest-MD5 perl-IO-Compress perl-Digest-SHA perl-Net-CIDR-Lite curl perl-DBI perl-DBD-SQLite perl-App-cpanminus openssl-devel zlib-devel
         dnf -y install perl-DBI perl-DBD-SQLite perl-Email-Sender perl-IO-Tty || true
-        ensure_extra_perl_modules
 }
 
 install_package_debian()
@@ -408,9 +429,15 @@ install_package_debian()
         echo -e "Starting Installation Dxspider Cluster"
         echo -e " "
         apt-get update
-        apt-get -y install perl rsync libtimedate-perl libnet-telnet-perl libcurses-perl libdigest-sha-perl libdata-dumper-simple-perl git libjson-perl libmojolicious-perl  libdata-structure-util-perl libmath-round-perl libev-perl libjson-xs-perl build-essential procps libnet-cidr-lite-perl curl libdbi-perl libdbd-sqlite3-perl
-        apt-get -y install libdbi-perl libdbd-sqlite3-perl libemail-sender-perl libio-pty-perl || true
-        ensure_extra_perl_modules
+        apt-get -y install perl git rsync curl iproute2 gzip procps build-essential cpanminus libssl-dev zlib1g-dev \
+                libtimedate-perl libnet-telnet-perl libcurses-perl libdigest-sha-perl \
+                libdata-dumper-simple-perl libjson-perl libmojolicious-perl \
+                libdata-structure-util-perl libmath-round-perl libev-perl \
+                libjson-xs-perl libnet-cidr-lite-perl libdbi-perl \
+                libdbd-sqlite3-perl libhtml-parser-perl \
+                libio-socket-inet6-perl libarchive-zip-perl libmailtools-perl \
+                libwww-perl libio-pty-perl \
+                libauthen-sasl-perl libnet-smtp-ssl-perl libemail-sender-perl
 }
 
 ensure_userdsn()
@@ -418,6 +445,68 @@ ensure_userdsn()
         local file="${DXSPATH}/local/DXVars.pm"
         perl -0pi -e 'if (!/^\s*our \$userdsn\s*=/m) { s/\n1;\s*\z/\nour \$userdsn = "dbi:SQLite:dbname=\$root\/local_data\/dxusers.db";\n\n1;\n/ or die "DXVars.pm: final 1; not found\n" }' "$file"
         chown "${OWNER}:${GROUP}" "$file"
+}
+
+# Add the registration section from the NEW upstream DXVars.pm.issue only when absent.
+# Never replace existing SYSOP registration settings or merge a partial block.
+ensure_registration_config()
+{
+        local file="${DXSPATH}/local/DXVars.pm"
+        local template="${DXSPATH}/perl/DXVars.pm.issue"
+        [ -f "$file" ] || die "Missing $file"
+        [ -f "$template" ] || die "Missing $template"
+
+        perl - "$file" "$template" <<'PERL'
+use strict;
+use warnings;
+use File::Copy qw(copy);
+my ($target, $template) = @ARGV;
+sub slurp {
+    my ($path) = @_;
+    open my $fh, '<', $path or die "Cannot read $path: $!\n";
+    local $/;
+    return <$fh>;
+}
+my $current = slurp($target);
+my $issue = slurp($template);
+my @names = qw(reg_enable reg_password_length reg_template_dir
+               reg_email_enable reg_email_smtp reg_email_port reg_email_user
+               reg_email_pass reg_email_from reg_email_admin
+               reg_telegram_enable reg_telegram_token reg_telegram_chatid);
+my @present = grep { $current =~ /^\s*(?:our\s+)?\$\Q$_\E\s*=/m } @names;
+if (@present == @names) {
+    print "Registration configuration already present; unchanged\n";
+    exit 0;
+}
+if (@present) {
+    die "DXVars.pm contains partial registration configuration (" . join(', ', @present) . "); refusing to overwrite or duplicate; inspect manually\n";
+}
+my $start = index($issue, '# DXSpider registration configuration');
+die "Registration section missing from $template\n" if $start < 0;
+my $end = index($issue, "\n1;", $start);
+die "Registration section terminator missing from $template\n" if $end < 0;
+my $block = substr($issue, $start, $end - $start);
+for my $name (@names) {
+    die "Missing $name in template\n" unless $block =~ /^\s*(?:our\s+)?\$\Q$name\E\s*=/m;
+}
+my $dsn = qr/^\s*our\s+\$userdsn\s*=.*?;[^\n]*(?:\n|\z)/m;
+my @dsn_matches = ($current =~ /($dsn)/g);
+die "Expected a single userdsn assignment in $target\n" unless @dsn_matches == 1;
+$current =~ s/($dsn)/$1\n$block\n/ or die "Could not insert registration section\n";
+die "DXVars.pm lacks final 1;\n" unless $current =~ /\n1;\s*\z/;
+my $backup = "$target.pre-registration.bak";
+die "Backup already exists: $backup; refusing to overwrite\n" if -e $backup;
+copy($target, $backup) or die "Cannot create $backup: $!\n";
+my $temp = "$target.registration.tmp.$$";
+open my $fh, '>', $temp or die "Cannot write $temp: $!\n";
+print {$fh} $current or die "Cannot write $temp: $!\n";
+close $fh or die "Cannot close $temp: $!\n";
+my @st = stat($target);
+chmod($st[2] & 07777, $temp) or die "chmod $temp: $!\n";
+chown($st[4], $st[5], $temp) or die "chown $temp: $!\n";
+rename($temp, $target) or die "Cannot replace $target: $!\n";
+print "Registration section inserted from DXVars.pm.issue; backup: $backup\n";
+PERL
 }
 
 # Enter CallSign for cluster
@@ -661,9 +750,7 @@ update_spider()
         swap_tree "${tmpdir}"
         rm -rf "${tmpdir}" || true
 
-        # Perl deps (best effort)
-        curl -fsSL https://cpanmin.us | perl - App::cpanminus || true
-        cpanm EV Mojolicious JSON JSON::XS Data::Structure::Util Math::Round DBI DBD::SQLite || true
+        # Dependencies were installed and verified before replacing DXSpider.
 
         echo -e " "
 }
@@ -706,6 +793,7 @@ welcome()
 
                 backup
                 check_distro
+                ensure_extra_perl_modules
 
                 # Keep your original local_data copy (but safe with mkdir -p)
                 mkdir -p "${DXSPATH}/local_data"
@@ -716,6 +804,7 @@ welcome()
                 update_spider
                 config_app
                 ensure_userdsn
+                ensure_registration_config
                 create_service
                 enable_service
 
@@ -723,6 +812,10 @@ welcome()
                 echo -e "==============================================================="
                 echo -e "                      DXSpider Updated"
                 echo -e "==============================================================="
+                echo ""
+                echo "NOTICE: If DXWeb and dxweb-admin services are installed,"
+                echo "        they have NOT been restarted by this updater."
+                echo "        Only the DXSpider service was restarted."
                 echo -e " "
 
         elif [ "${OPTION}" == "R" ]; then
