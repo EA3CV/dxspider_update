@@ -6,8 +6,8 @@
 #
 # Fallback (optional): if bundle is missing, it can clone from REPO_URL.
 #
-# Version: 2.7
-# Date: 20261103
+# Version: 2.13
+# Date: 20261118
 
 set -Eeuo pipefail
 
@@ -19,7 +19,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # ----------------------------
 # Defaults (override via env)
 # ----------------------------
-: "${REPO_URL:=git://scm.dxspider.org/spider}"   # fallback only
+: "${REPO_URL:=git://scm.dxcluster.org/spider}"   # fallback only
+: "${BACKUP_REPO_URL:=https://github.com/EA3CV/dxspider.git}"
 : "${BRANCH:=mojo}"
 
 : "${SYSOP_USER:=sysop}"
@@ -74,18 +75,20 @@ load_distro_actions() {
 normalize_distro() {
   local id="$1" version="$2" major="${2%%.*}"
   case "$id" in
-    zorin) printf 'zorin\n'; return 0 ;;
-  esac
-  [[ "$major" =~ ^[0-9]+$ ]] || return 1
-  case "$id" in
-    ubuntu) printf 'Ubuntu %s\n' "$major" ;;
-    linuxmint) printf 'Linux Mint %s\n' "$major" ;;
-    debian) printf 'Debian GNU/Linux %s\n' "$major" ;;
-    raspbian) printf 'Raspbian GNU/Linux %s\n' "$major" ;;
-    centos) printf 'CentOS Linux %s\n' "$major" ;;
-    rocky) printf 'Rocky Linux %s\n' "$major" ;;
-    almalinux) printf 'AlmaLinux %s\n' "$major" ;;
-    fedora) printf 'Fedora Linux %s\n' "$major" ;;
+    ubuntu) printf 'Ubuntu\n' ;;
+    linuxmint) printf 'Linux Mint\n' ;;
+    debian) printf 'Debian GNU/Linux\n' ;;
+    raspbian) printf 'Raspbian GNU/Linux\n' ;;
+    zorin) printf 'zorin\n' ;;
+    fedora) printf 'Fedora Linux\n' ;;
+    centos|rocky|almalinux)
+      [[ "$major" =~ ^[0-9]+$ ]] || return 1
+      case "$major" in 8|9) ;; *) return 1 ;; esac
+      case "$id" in
+        centos) printf 'CentOS Linux %s\n' "$major" ;;
+        rocky) printf 'Rocky Linux %s\n' "$major" ;;
+        almalinux) printf 'AlmaLinux %s\n' "$major" ;;
+      esac ;;
     *) return 1 ;;
   esac
 }
@@ -212,28 +215,25 @@ install_package_debian() {
   apt-get upgrade -y
 
   apt-get install -y \
-    ca-certificates \
-    git curl gzip coreutils procps \
-    build-essential \
-    cpanminus \
-    libtimedate-perl \
-    libnet-telnet-perl \
-    libcurses-perl \
-    libdigest-sha-perl \
-    libdata-dumper-simple-perl \
-    libjson-perl \
-    libjson-xs-perl \
-    libmojolicious-perl \
-    libdata-structure-util-perl \
-    libmath-round-perl \
-    libev-perl \
-    libnet-cidr-lite-perl \
-    libio-compress-perl \
-    libdbi-perl \
-    libdbd-sqlite3-perl \
-    libdbd-mysql-perl \
-    libdbd-mariadb-perl
+    perl git rsync curl iproute2 gzip procps build-essential cpanminus libssl-dev zlib1g-dev \
+    libtimedate-perl libnet-telnet-perl libcurses-perl libdigest-sha-perl \
+    libdata-dumper-simple-perl libjson-perl libmojolicious-perl \
+    libdata-structure-util-perl libmath-round-perl libev-perl \
+    libjson-xs-perl libnet-cidr-lite-perl libdbi-perl \
+    libdbd-sqlite3-perl libhtml-parser-perl \
+    libio-socket-inet6-perl libarchive-zip-perl libmailtools-perl \
+    libwww-perl libio-pty-perl \
+    libauthen-sasl-perl libnet-smtp-ssl-perl libemail-sender-perl
 }
+
+# Required Perl modules from Guia_DXS_ES / Guide_DXS_EN.
+DXS_REQUIRED_MODULES=(
+        EV Mojolicious JSON JSON::XS Data::Structure::Util Math::Round
+        Net::CIDR::Lite DBI DBD::SQLite Date::Parse HTML::Parser
+        IO::Socket::INET6 Archive::Zip Curses Mail::Internet Digest::SHA
+        LWP::UserAgent LWP::Parallel::UserAgent DB_File IO::Pty
+        Authen::SASL Net::SMTP::SSL Email::Sender
+)
 
 install_optional_perl_packages() {
   local package
@@ -249,24 +249,24 @@ install_optional_perl_packages() {
 
 ensure_cpanm_and_modules() {
   local module
-  local -a required=(EV Mojolicious JSON JSON::XS Data::Structure::Util Math::Round DBI DBD::SQLite Email::Sender IO::Pty)
-  for module in "${required[@]}"; do
-    if perl -M"$module" -e 1 >/dev/null 2>&1; then
-      continue
-    fi
-    if ! have_cmd cpanm; then
-      log "cpanm not found. Installing it for missing Perl dependencies..."
-      if have_cmd apt-get; then apt-get install -y cpanminus || true
-      elif have_cmd dnf; then dnf -y install perl-App-cpanminus || true; fi
-    fi
-    if ! have_cmd cpanm; then
-      curl -fsSL https://cpanmin.us | perl - App::cpanminus || die "Cannot install cpanm"
-    fi
-    have_cmd cpanm || die "cpanm is unavailable"
-    log "Installing missing Perl module: $module"
-    cpanm --notest "$module" || die "Failed to install Perl module $module"
+  local -a missing=()
+  perl -e 'die "Perl >= 5.16.1 required\n" if $] < 5.016001' || die "Perl version is too old"
+  for module in "${DXS_REQUIRED_MODULES[@]}"; do
+    perl -M"$module" -e 1 >/dev/null 2>&1 || missing+=("$module")
+  done
+  if (( ${#missing[@]} > 0 )); then
+    log "Missing Perl modules: ${missing[*]}"
+    have_cmd cpanm || die "cpanm unavailable; install cpanminus and retry"
+    for module in "${missing[@]}"; do
+      log "Installing missing Perl module: $module"
+      cpanm "$module" || die "Failed to install Perl module $module"
+    done
+  fi
+  for module in "${DXS_REQUIRED_MODULES[@]}"; do
     perl -M"$module" -e 1 >/dev/null 2>&1 || die "Perl module still unavailable: $module"
   done
+  perl -MMojolicious -e 'Mojolicious->VERSION(7.26)' >/dev/null 2>&1 || die "Mojolicious >= 7.26 required"
+  log "DXSpider Perl dependency verification: OK"
 }
 
 # ----------------------------
@@ -398,17 +398,26 @@ clone_from_bundle() {
 }
 
 clone_from_repo_fallback() {
-  log "Bundle not available. Falling back to REPO_URL clone: ${REPO_URL} (branch: ${BRANCH})"
+  log "Bundle not available. Trying Dirk repository first: ${REPO_URL}"
   if [[ -d "${SPIDER_DIR}/.git" ]]; then
-    su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git fetch --all --prune"
+    if ! su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git fetch '${REPO_URL}' '${BRANCH}'"; then
+      log "Dirk repository failed; trying GitHub backup: ${BACKUP_REPO_URL}"
+      su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git fetch '${BACKUP_REPO_URL}' '${BRANCH}'" || die "Both repositories failed"
+    fi
+    su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git checkout -B '${BRANCH}' FETCH_HEAD"
   else
-    su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git clone '${REPO_URL}' ."
+    mkdir -p "${SPIDER_DIR}"
+    chown "${SYSOP_USER}:${SPIDER_GROUP}" "${SPIDER_DIR}"
+    if ! su - "${SYSOP_USER}" -c "git clone --branch '${BRANCH}' '${REPO_URL}' '${SPIDER_DIR}'"; then
+      log "Dirk repository failed; trying GitHub backup: ${BACKUP_REPO_URL}"
+      # Remove only the failed new clone; never remove an existing installation.
+      [[ ! -d "${SPIDER_DIR}/.git" ]] || die "Partial Git clone exists; refusing to overwrite it"
+      rm -rf "${SPIDER_DIR}"
+      su - "${SYSOP_USER}" -c "git clone --branch '${BRANCH}' '${BACKUP_REPO_URL}' '${SPIDER_DIR}'" || die "Both repositories failed"
+    fi
   fi
-  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git checkout '${BRANCH}' || git checkout -b '${BRANCH}' 'origin/${BRANCH}'"
-  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git pull --ff-only || true"
-
-  log "Fallback clone check (may lack tags/history depending on REPO_URL):"
-  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && echo \"version=\$(git describe --tags --long --always) build=\$(git rev-list --count HEAD) commit=\$(git rev-parse --short HEAD)\" || true"
+  log "Fallback clone check:"
+  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git describe --tags --long --always && git rev-parse --short HEAD"
 }
 
 git_install_spider() {
@@ -589,6 +598,9 @@ Symlink   : ${SPIDER_LINK} -> ${SPIDER_DIR}
 User      : ${SYSOP_USER}
 Group     : ${SPIDER_GROUP}
 Service   : systemctl status dxspider
+
+NOTICE: DXWeb and dxweb-admin services have NOT been configured.
+        This installer only configures the DXSpider service.
 
 EOF
 }
