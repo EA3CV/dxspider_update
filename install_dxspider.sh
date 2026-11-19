@@ -460,17 +460,19 @@ set_dxvars_field() {
   KEY="$key" VALUE="$value" perl -i -0777 -pe '
     my $k = $ENV{KEY};
     my $v = $ENV{VALUE};
-    $v =~ s/\\/\\\\/g;
-    $v =~ s/"/\\"/g;
-
-    # Replace lines like: mycall = "...";
-    s/^(\s*\Q$k\E\s*=\s*).*(;\s*)$/${1}"$v"${2}/mg;
-
-    # Replace lines like: our $mycall = "...";
-    s/^(\s*(?:our\s+)?\$\Q$k\E\s*=\s*).*(;\s*)$/${1}"$v"${2}/mg;
+    if ($k eq "myemail") {
+      $v =~ s/\\@/@/g;
+      $v =~ s/\\/\\\\/g;
+      $v =~ s/\x27/\\\x27/g;
+      s/^(\s*(?:our\s+)?\$\Q$k\E\s*=\s*).*(;\s*)$/${1}\x27$v\x27${2}/mg;
+    } else {
+      $v =~ s/\\/\\\\/g;
+      $v =~ s/"/\\"/g;
+      s/^(\s*\Q$k\E\s*=\s*).*(;\s*)$/${1}"$v"${2}/mg;
+      s/^(\s*(?:our\s+)?\$\Q$k\E\s*=\s*).*(;\s*)$/${1}"$v"${2}/mg;
+    }
   ' "$file"
 }
-
 prompt_var() {
   local var="$1" prompt="$2" def="${3:-}" val=""
   if [[ "${NONINTERACTIVE}" == "1" ]]; then

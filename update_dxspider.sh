@@ -545,14 +545,15 @@ insert_name()
 # Enter your E-mail
 insert_email()
 {
-        echo -n "Please enter your E-mail Address(syntax like your\\@email.com): "
-        chr="\""
+        echo -n "Please enter your E-mail Address (e.g. your@email.com, no backslash): "
         read -r EMAIL
         echo "${EMAIL}"
-        EMAIL_ESC=$(sed_escape "${EMAIL}")
-        su - "$OWNER" -c "sed -i 's/myemail =.*/myemail = ${chr}${EMAIL_ESC}${chr};/' '${DXSPATH}/local/DXVars.pm'"
+        EMAIL_VALUE="${EMAIL}" perl -i -pe '
+          BEGIN { $v = $ENV{EMAIL_VALUE}; $v =~ s/\\@/@/g; $v =~ s/\\/\\\\/g; $v =~ s/\x27/\\\x27/g; }
+          s/^(\s*(?:our\s+)?\$?myemail\s*=\s*).*(;\s*)$/${1}\x27$v\x27${2}/;
+        ' "${DXSPATH}/local/DXVars.pm"
+        chown "$OWNER:$GROUP" "${DXSPATH}/local/DXVars.pm"
 }
-
 # Enter your mylocator
 insert_locator()
 {
