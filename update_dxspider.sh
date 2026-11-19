@@ -47,10 +47,82 @@ cleanup_update_temp()
            [ ! -L "${UPDATE_TMP_ACTIVE}" ] &&
            [ "$(dirname -- "${UPDATE_TMP_ACTIVE}")" = "${TMP_BASE}" ] &&
            [[ "$(basename -- "${UPDATE_TMP_ACTIVE}")" =~ ^dxspider\.update\.[[:alnum:]]{6}$ ]]; then
-                rm -rf -- "${UPDATE_TMP_ACTIVE}" || true
+                if ! rm -rf -- "${UPDATE_TMP_ACTIVE}"; then
+                        echo "ERROR: unable to remove updater staging directory ${UPDATE_TMP_ACTIVE}" >&2
+                        return 1
+                fi
+        elif [ -n "${UPDATE_TMP_ACTIVE}" ] && [ -e "${UPDATE_TMP_ACTIVE}" ]; then
+                echo "ERROR: unsafe updater staging path; preserved ${UPDATE_TMP_ACTIVE}" >&2
+                return 1
         fi
+        return 0
 }
-trap 'cleanup_update_temp' EXIT
+# Transaction state: never discard the only surviving previous tree.
+SWAP_HELD_ACTIVE=""
+UPDATE_FINISHED=0
+BACKUP_STAGE_ACTIVE=""
+BACKUP_PREVIOUS_ACTIVE=""
+DXSPIDER_WAS_ACTIVE=0
+cleanup_update_exit()
+{
+        local rc=$? failed_tree="" rollback_ok=1
+        trap - ERR EXIT
+        set +e
+        if [ -n "${SWAP_HELD_ACTIVE}" ] && [ "${UPDATE_FINISHED}" -ne 1 ]; then
+                # Keep both trees and diagnostics for inspection after any rollback.
+                local rollback_staging="${UPDATE_TMP_ACTIVE}"
+                echo "ERROR: update failed after replacing DXSpider; restoring the original tree" >&2
+                if [ "${OLD_TYPE}" = "service" ]; then
+                        systemctl stop dxspider.service >&2 || true
+                fi
+                # Move the incomplete new tree aside; never remove it before restoring.
+                failed_tree="${UPDATE_TMP_ACTIVE}/failed-new-spider"
+                if [ -e "${failed_tree}" ]; then rollback_ok=0; fi
+                if [ "${rollback_ok}" -eq 1 ] && [ -e "${DXSPATH}" ] && ! mv -- "${DXSPATH}" "${failed_tree}"; then
+                        rollback_ok=0
+                fi
+                if [ "${rollback_ok}" -eq 1 ] && mv -- "${SWAP_HELD_ACTIVE}" "${DXSPATH}"; then
+                        SWAP_HELD_ACTIVE=""
+                        if [ "${OLD_TYPE}" = "service" ]; then
+                                if [ -f "${BACKUP_DIR}/dxspider.service" ]; then
+                                        cp -a -- "${BACKUP_DIR}/dxspider.service" "${OLD_SERVICE_PATH}" || rollback_ok=0
+                                fi
+                                systemctl daemon-reload || rollback_ok=0
+                                if [ "${DXSPIDER_WAS_ACTIVE}" -eq 1 ]; then
+                                        systemctl restart dxspider.service || rollback_ok=0
+                                fi
+                        fi
+                        if [ "${rollback_ok}" -eq 1 ]; then
+                                echo "Original DXSpider tree restored at ${DXSPATH}" >&2
+                        else
+                                echo "WARNING: original tree restored, but service recovery needs inspection" >&2
+                        fi
+                else
+                        rollback_ok=0
+                fi
+                if [ "${rollback_ok}" -ne 1 ]; then
+                        echo "CRITICAL: automatic recovery incomplete; inspect ${DXSPATH}" >&2
+                fi
+                echo "Rollback diagnostics preserved at ${rollback_staging}" >&2
+                UPDATE_TMP_ACTIVE=""
+        fi
+        if [ -n "${BACKUP_STAGE_ACTIVE}" ] && [ -d "${BACKUP_STAGE_ACTIVE}" ]; then
+                rm -rf -- "${BACKUP_STAGE_ACTIVE}" || true
+        fi
+        if [ -n "${BACKUP_PREVIOUS_ACTIVE}" ] && [ -d "${BACKUP_PREVIOUS_ACTIVE}" ]; then
+                if [ ! -e "${BACKUP_DIR}" ]; then
+                        mv -- "${BACKUP_PREVIOUS_ACTIVE}" "${BACKUP_DIR}" || true
+                else
+                        echo "WARNING: older backup preserved at ${BACKUP_PREVIOUS_ACTIVE}" >&2
+                fi
+        fi
+        if ! cleanup_update_temp; then
+                echo "WARNING: staging cleanup incomplete; manual inspection required" >&2
+                [ "${rc}" -ne 0 ] || rc=1
+        fi
+        return "${rc}"
+}
+trap 'cleanup_update_exit' EXIT
 trap 'die "Aborted at line $LINENO (command: $BASH_COMMAND)"' ERR
 
 check_update_staging_space()
@@ -83,47 +155,100 @@ check_update_staging_space()
 
 backup()
 {
+        local parent stage previous metadata
         is_spider
         is_service
-        # Do not modify backup/configuration while the selected manual node runs.
         if [ "${OLD_TYPE}" = "pid" ]; then
                 require_manual_spider_stopped
         fi
         is_backup
-        make_config
-
-        # Check the repository before stopping or changing anything.
         preflight_repo
 
-        stop_spider
-
+        # Never overwrite the only rollback copy in place.
+        [ -n "${BACKUP_DIR}" ] && [ "${BACKUP_DIR}" != "/" ] || die "Unsafe BACKUP_DIR"
+        [ "${BACKUP_DIR}" != "${DXSPATH}" ] || die "Backup equals installation"
+        case "${BACKUP_DIR}/" in "${DXSPATH}/"*) die "Backup is inside installation" ;; esac
+        case "${DXSPATH}/" in "${BACKUP_DIR}/"*) die "Installation is inside backup" ;; esac
+        [ ! -L "${BACKUP_DIR}" ] || die "Backup directory must not be a symlink"
+        parent="$(realpath -e -- "$(dirname -- "${BACKUP_DIR}")")" || die "Backup parent missing"
+        BACKUP_DIR="${parent%/}/$(basename -- "${BACKUP_DIR}")"
         if [ "${BACKUP}" = "true" ]; then
-                echo "A backup directory already exists."
-                echo "Do you want to delete it? [Y/N] "
+                echo "A backup exists at ${BACKUP_DIR}. Replace it with a fresh rollback copy? [Y/N]"
                 read -r YESNO
-                YESNO="${YESNO^^}"
-                if [ "${YESNO}" = "N" ]; then
-                        [ -f "${BACKUP_DIR}/config.backup.old" ] && mv "${BACKUP_DIR}/config.backup.old" "${BACKUP_DIR}/config.backup" || true
-                        echo "Using the current Backup."
-                elif [ "${YESNO}" = "Y" ]; then
-                        echo " "
-                        echo "Backup begins ..."
-                        rm -rf "${BACKUP_DIR}"
-                        mkdir -p "${BACKUP_DIR}"
-                        [ -f "${OLD_SERVICE_PATH}" ] && cp -a "${OLD_SERVICE_PATH}" "${BACKUP_DIR}/dxspider.service" || true
-                        cp -a "${DXSPATH}" "${BACKUP_DIR}/spider"
-                else
-                        echo "Bye!"
-                        exit 1
-                fi
-        else
-                echo " "
-                echo "Backup begins ..."
-                mkdir -p "${BACKUP_DIR}"
-                [ -f "${OLD_SERVICE_PATH}" ] && cp -a "${OLD_SERVICE_PATH}" "${BACKUP_DIR}/dxspider.service" || true
-                cp -a "${DXSPATH}" "${BACKUP_DIR}/spider"
+                case "${YESNO^^}" in
+                        N)
+                                [ -f "${BACKUP_DIR}/spider/perl/cluster.pl" ] || die "Existing backup incomplete"
+                                [ -f "${BACKUP_DIR}/config.backup" ] || die "Existing backup metadata missing"
+                                echo "Using the current Backup."
+                                return 0
+                                ;;
+                        Y) ;;
+                        *) die "Invalid backup response" ;;
+                esac
         fi
+
+        # Space for the replacement backup must be available before stopping.
+        local required_kb available_kb
+        required_kb="$(du -sk -- "${DXSPATH}" | awk '{print $1}')"
+        available_kb="$(df -Pk -- "${parent}" | awk 'END {print $4}')"
+        (( available_kb >= required_kb + 262144 )) || die "Not enough space for safe backup replacement"
+
+        if [ "${OLD_TYPE}" = "service" ] && [ "$(systemctl is-active dxspider.service 2>/dev/null || true)" = "active" ]; then
+                DXSPIDER_WAS_ACTIVE=1
+        fi
+        stop_spider
+        stage="$(mktemp -d "${parent%/}/dxspider.backup-build.XXXXXX")"
+        BACKUP_STAGE_ACTIVE="${stage}"
+        # Failures before installation remove only the newly built staging copy.
+        if ! cp -a -- "${DXSPATH}" "${stage}/spider"; then
+                rm -rf -- "${stage}"
+                die "Backup copy failed; previous backup preserved"
+        fi
+        if [ ! -f "${stage}/spider/perl/cluster.pl" ]; then
+                rm -rf -- "${stage}"
+                die "Backup validation failed; previous backup preserved"
+        fi
+        if [ -f "${OLD_SERVICE_PATH}" ]; then
+                if ! cp -a -- "${OLD_SERVICE_PATH}" "${stage}/dxspider.service"; then
+                        rm -rf -- "${stage}"
+                        die "Service backup failed; previous backup preserved"
+                fi
+        fi
+        if ! cat > "${stage}/config.backup" <<EOL
+owner=$OWNER
+group=$GROUP
+old_type=$OLD_TYPE
+old_dxs_path=$DXSPATH
+old_service_path=$OLD_SERVICE_PATH
+EOL
+        then
+                rm -rf -- "${stage}"
+                die "Backup metadata failed; previous backup preserved"
+        fi
+        previous=""
+        if [ -e "${BACKUP_DIR}" ]; then
+                previous="$(mktemp -d "${parent%/}/dxspider.backup-old.XXXXXX")"
+                rmdir -- "${previous}"
+                if ! mv -- "${BACKUP_DIR}" "${previous}"; then
+                        rm -rf -- "${stage}"
+                        die "Cannot preserve previous backup"
+                fi
+                BACKUP_PREVIOUS_ACTIVE="${previous}"
+        fi
+        if ! mv -- "${stage}" "${BACKUP_DIR}"; then
+                if [ -n "${previous}" ] && mv -- "${previous}" "${BACKUP_DIR}"; then
+                        BACKUP_PREVIOUS_ACTIVE=""
+                fi
+                die "Cannot activate new backup; previous copy at ${previous:-$BACKUP_DIR}"
+        fi
+        BACKUP_STAGE_ACTIVE=""
+        if [ -n "${previous}" ]; then
+                rm -rf -- "${previous}" || die "New backup ready; old backup cleanup failed"
+                BACKUP_PREVIOUS_ACTIVE=""
+        fi
+        echo "Fresh rollback backup ready: ${BACKUP_DIR}/spider"
 }
+
 # Distribution lookup: one configuration entry per OS family.
 # RPM 8/9 remain separate because their package actions differ.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -293,24 +418,20 @@ swap_tree()
         local tmpdir="$1"
         local newtree="${tmpdir}/spider"
         local oldtree="${DXSPATH}"
-        local ts
-        ts="$(date +%Y%m%d%H%M%S)"
-        local snapshot="${BACKUP_DIR}/spider.preupdate.${ts}"
-
-        echo -e " "
-        echo "Checking DXSpider stop state..."
+        local held="${tmpdir}/previous-spider"
+        [ -f "${BACKUP_DIR}/spider/perl/cluster.pl" ] || die "Rollback backup missing"
+        [ -f "${BACKUP_DIR}/config.backup" ] || die "Rollback metadata missing"
+        [ -d "${newtree}" ] || die "Staged tree missing"
+        [ ! -e "${held}" ] || die "Unexpected previous tree"
+        [ "$(stat -c %d -- "${oldtree}")" = "$(stat -c %d -- "${tmpdir}")" ] || die "Staging must be on the same filesystem"
         stop_spider
-
-        echo "Saving pre-update snapshot to: ${snapshot}"
-        mkdir -p "${BACKUP_DIR}"
-        cp -a "${oldtree}" "${snapshot}"
-
-        echo "Replacing ${oldtree} with new version..."
-        rm -rf "${oldtree}"
-        mkdir -p "$(dirname "${oldtree}")"
-        mv "${newtree}" "${oldtree}"
-
-        # Fix ownership/permissions similar to your original
+        mv -- "${oldtree}" "${held}"
+        SWAP_HELD_ACTIVE="${held}"
+        if ! mv -- "${newtree}" "${oldtree}"; then
+                mv -- "${held}" "${oldtree}" || die "CRITICAL: old installation preserved at ${held}"
+                SWAP_HELD_ACTIVE=""
+                die "New tree activation failed; original restored"
+        fi
         chown -R "$OWNER:$GROUP" "${oldtree}"
         cd "${oldtree}"
         find ./ -type d -exec chmod 2775 {} \;
@@ -857,8 +978,7 @@ update_spider()
         clone_to_temp "${tmpdir}"
         preserve_runtime_data "${DXSPATH}" "${tmpdir}/spider"
         swap_tree "${tmpdir}"
-        cleanup_update_temp
-        UPDATE_TMP_ACTIVE=""
+        # Keep staging and old installation until configuration and service succeed.
 
         # Dependencies were installed and verified before replacing DXSpider.
 
@@ -909,6 +1029,20 @@ welcome()
                 if [ "${OLD_TYPE}" = "pid" ]; then
                         require_manual_spider_stopped
                 fi
+                # Stop optional web services only when their units exist.
+                # Do not enable, disable or restart them.
+                if command -v systemctl >/dev/null 2>&1; then
+                        for web_service in dxweb.service dxweb-admin.service; do
+                                web_load_state="$(systemctl show "$web_service" -p LoadState --value 2>/dev/null || true)"
+                                if [ "$web_load_state" = "loaded" ]; then
+                                        echo "Stopping $web_service ..."
+                                        systemctl stop "$web_service" || die "Unable to stop $web_service"
+                                        web_active_state="$(systemctl is-active "$web_service" 2>/dev/null || true)"
+                                        [ "$web_active_state" != "active" ] && [ "$web_active_state" != "activating" ] ||
+                                                die "$web_service is still running"
+                                fi
+                        done
+                fi
                 backup
                 check_distro
                 ensure_extra_perl_modules
@@ -925,6 +1059,15 @@ welcome()
                 ensure_registration_config
                 create_service
                 enable_service
+
+                # The update has succeeded; the fresh rollback copy is already
+                # available, so the old live tree is no longer needed.
+                UPDATE_FINISHED=1
+                # The installed tree and service are now committed. A cleanup
+                # failure must be reported, not silently presented as success.
+                cleanup_update_temp || die "Update installed but staging cleanup failed; inspect ${UPDATE_TMP_ACTIVE}"
+                UPDATE_TMP_ACTIVE=""
+                SWAP_HELD_ACTIVE=""
 
                 echo -e " "
                 echo -e "==============================================================="
