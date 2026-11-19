@@ -41,6 +41,10 @@ backup()
 {
         is_spider
         is_service
+        # Do not modify backup/configuration while the selected manual node runs.
+        if [ "${OLD_TYPE}" = "pid" ]; then
+                require_manual_spider_stopped
+        fi
         is_backup
         make_config
 
@@ -85,12 +89,16 @@ normalize_distro()
         local distro_id="$1" version="$2" major
         major="${version%%.*}"
         case "$distro_id" in
-                ubuntu) printf 'Ubuntu\n' ;;
-                linuxmint) printf 'Linux Mint\n' ;;
-                debian) printf 'Debian GNU/Linux\n' ;;
-                raspbian) printf 'Raspbian GNU/Linux\n' ;;
+                ubuntu|linuxmint|debian|raspbian|fedora)
+                        [[ "$major" =~ ^[0-9]+$ ]] || return 1
+                        case "$distro_id" in
+                                ubuntu) printf 'Ubuntu %s\n' "$major" ;;
+                                linuxmint) printf 'Linux Mint %s\n' "$major" ;;
+                                debian) printf 'Debian GNU/Linux %s\n' "$major" ;;
+                                raspbian) printf 'Raspbian GNU/Linux %s\n' "$major" ;;
+                                fedora) printf 'Fedora Linux %s\n' "$major" ;;
+                        esac ;;
                 zorin) printf 'zorin\n' ;;
-                fedora) printf 'Fedora Linux\n' ;;
                 centos|rocky|almalinux)
                         [[ "$major" =~ ^[0-9]+$ ]] || return 1
                         case "$major" in
@@ -147,6 +155,12 @@ check_distro()
                         *) die "Invalid package action: $action" ;;
                 esac
         done
+
+        # Preflight validates the OS and its actions without changing packages.
+        if [ "${1:-}" = "validate" ]; then
+                echo "Validated OS: ${distroname} (matched: ${distro_key})"
+                return 0
+        fi
 
         echo "Detected OS: ${distroname}"
         echo "Matched OS: ${distro_key}"
@@ -242,7 +256,7 @@ swap_tree()
         local snapshot="${BACKUP_DIR}/spider.preupdate.${ts}"
 
         echo -e " "
-        echo "Stopping service..."
+        echo "Checking DXSpider stop state..."
         stop_spider
 
         echo "Saving pre-update snapshot to: ${snapshot}"
@@ -604,18 +618,69 @@ is_backup()
         fi
 }
 
+# Find a running cluster.pl belonging to the exact installation selected by the SYSOP.
+# A matching process blocks an unattended update; it is never killed here.
+manual_spider_pids()
+{
+        local target pid proc arg cwd candidate
+        local -a argv=()
+        target=$(readlink -f -- "${DXSPATH}/perl/cluster.pl") || return 1
+        for proc in /proc/[0-9]*; do
+                [ -r "${proc}/cmdline" ] || continue
+                pid=${proc##*/}
+                argv=()
+                mapfile -d '' -t argv < "${proc}/cmdline" 2>/dev/null || continue
+                cwd=$(readlink -f -- "${proc}/cwd" 2>/dev/null || true)
+                for arg in "${argv[@]}"; do
+                        case "$arg" in
+                                cluster.pl|*/cluster.pl)
+                                        if [[ "$arg" = /* ]]; then
+                                                candidate=$(readlink -f -- "$arg" 2>/dev/null || true)
+                                        elif [ -n "$cwd" ]; then
+                                                candidate=$(readlink -f -- "${cwd}/${arg}" 2>/dev/null || true)
+                                        else
+                                                candidate=""
+                                        fi
+                                        if [ -n "$candidate" ] && [ "$candidate" = "$target" ]; then
+                                                printf '%s\n' "$pid"
+                                                break
+                                        fi ;;
+                        esac
+                done
+        done
+}
+
+require_manual_spider_stopped()
+{
+        local pids
+        pids=$(manual_spider_pids) || die "Cannot inspect DXSpider processes; update cancelled"
+        if [ -n "$pids" ]; then
+                echo "===============================================================" >&2
+                echo "DXSpider is running manually at: ${DXSPATH}" >&2
+                echo "Process PID(s): ${pids//$'\n'/, }" >&2
+                echo "Stop this DXSpider instance manually before updating." >&2
+                echo "No processes have been stopped by the updater." >&2
+                echo "===============================================================" >&2
+                die "Manual DXSpider process is still running; update cancelled"
+        fi
+}
+
 is_service()
 {
-        STATUS=$(systemctl is-active dxspider 2>/dev/null || true)
+        local load_state=""
+        if command -v systemctl >/dev/null 2>&1; then
+                load_state=$(systemctl show dxspider.service -p LoadState --value 2>/dev/null || true)
+        fi
+        STATUS=$(systemctl is-active dxspider.service 2>/dev/null || true)
 
-        if [ "${STATUS}" = "active" ] || [ "${STATUS}" = "inactive" ] || [ "${STATUS}" = "failed" ]; then
+        if [ "${load_state}" = "loaded" ]; then
                 OLD_TYPE="service"
                 OLD_SERVICE_PATH="/etc/systemd/system/dxspider.service"
                 echo "DXSpider is using systemctl."
         else
-                PID=$(pgrep -f cluster.pl | head -n 1 || true)
                 OLD_TYPE="pid"
-                echo "DXSpider has PID ${PID}"
+                PID=""
+                echo "DXSpider has no loaded systemd service (manual mode)."
         fi
 }
 
@@ -649,8 +714,7 @@ make_backup()
                         echo "Using the current Backup."
                 fi
         else
-                PID=$(pgrep -f cluster.pl | head -n 1 || true)
-                echo "DXSpider has PID $PID"
+                echo "DXSpider manual process detection is handled by require_manual_spider_stopped"
         fi
 }
 
@@ -726,10 +790,9 @@ run_restore()
 stop_spider()
 {
         if [ "${OLD_TYPE}" = "pid" ]; then
-                [ -z "${PID}" ] && PID=$(pgrep -f cluster.pl | head -n 1 || true)
-                [ -n "${PID}" ] && kill -9 "${PID}" || true
+                require_manual_spider_stopped
         else
-                systemctl stop dxspider || true
+                systemctl stop dxspider.service || die "Unable to stop dxspider.service"
         fi
 }
 
@@ -792,6 +855,14 @@ welcome()
                 echo -e "==============================================================="
                 echo -e " "
 
+                # Reject unsupported OS versions before stopping DXSpider.
+                check_distro validate
+                # Never stop a manually started DXSpider process automatically.
+                is_spider
+                is_service
+                if [ "${OLD_TYPE}" = "pid" ]; then
+                        require_manual_spider_stopped
+                fi
                 backup
                 check_distro
                 ensure_extra_perl_modules
@@ -828,6 +899,13 @@ welcome()
 
                 is_backup
                 read_config
+                # The saved mode can be stale; inspect the currently selected tree.
+                DXSPATH="$OLD_DXS_PATH"
+                is_spider
+                is_service
+                if [ "${OLD_TYPE}" = "pid" ]; then
+                        require_manual_spider_stopped
+                fi
                 run_restore
 
         elif [ "${OPTION}" == "Q" ]; then

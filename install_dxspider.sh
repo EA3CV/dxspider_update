@@ -75,12 +75,12 @@ load_distro_actions() {
 normalize_distro() {
   local id="$1" version="$2" major="${2%%.*}"
   case "$id" in
-    ubuntu) printf 'Ubuntu\n' ;;
-    linuxmint) printf 'Linux Mint\n' ;;
-    debian) printf 'Debian GNU/Linux\n' ;;
-    raspbian) printf 'Raspbian GNU/Linux\n' ;;
+    ubuntu) printf 'Ubuntu %s\n' "$major" ;;
+    linuxmint) printf 'Linux Mint %s\n' "$major" ;;
+    debian) printf 'Debian GNU/Linux %s\n' "$major" ;;
+    raspbian) printf 'Raspbian GNU/Linux %s\n' "$major" ;;
     zorin) printf 'zorin\n' ;;
-    fedora) printf 'Fedora Linux\n' ;;
+    fedora) printf 'Fedora Linux %s\n' "$major" ;;
     centos|rocky|almalinux)
       [[ "$major" =~ ^[0-9]+$ ]] || return 1
       case "$major" in 8|9) ;; *) return 1 ;; esac
