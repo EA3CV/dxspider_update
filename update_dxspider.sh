@@ -18,7 +18,8 @@ set -Eeuo pipefail
 : "${BACKUP_REPO_URL:=https://github.com/EA3CV/dxspider.git}"
 : "${BRANCH:=mojo}"
 : "${BACKUP_DIR:=/home/spider.backup}"
-: "${TMP_BASE:=/tmp}"
+# Optional override; by default stage beside the selected DXSpider tree.
+: "${TMP_BASE:=}"
 
 # --- Globals used by original script ---
 DXSPATH=""
@@ -35,7 +36,50 @@ die() { echo -e "ERROR: $*" >&2; exit 1; }
 log() { echo -e "$*"; }
 sed_escape() { printf '%s' "$1" | sed -e 's/[\\\/&]/\\&/g'; }
 
+# Only updater-created staging paths are eligible for cleanup.
+UPDATE_TMP_ACTIVE=""
+cleanup_update_temp()
+{
+        # Remove only the exact staging directory registered by this run.
+        # Reject symlinks, nested paths and names outside mktemp's pattern.
+        if [ -n "${UPDATE_TMP_ACTIVE}" ] &&
+           [ -d "${UPDATE_TMP_ACTIVE}" ] &&
+           [ ! -L "${UPDATE_TMP_ACTIVE}" ] &&
+           [ "$(dirname -- "${UPDATE_TMP_ACTIVE}")" = "${TMP_BASE}" ] &&
+           [[ "$(basename -- "${UPDATE_TMP_ACTIVE}")" =~ ^dxspider\.update\.[[:alnum:]]{6}$ ]]; then
+                rm -rf -- "${UPDATE_TMP_ACTIVE}" || true
+        fi
+}
+trap 'cleanup_update_temp' EXIT
 trap 'die "Aborted at line $LINENO (command: $BASH_COMMAND)"' ERR
+
+check_update_staging_space()
+{
+        local required_kb available_kb source_kb=0 part
+        # Use the installation parent by default, regardless of root's $HOME.
+        # This keeps staging on the same filesystem as the installed tree.
+        if [ -z "${TMP_BASE}" ]; then
+                TMP_BASE="$(dirname -- "${DXSPATH}")"
+        fi
+        [ -d "${TMP_BASE}" ] || die "Temporary base directory does not exist: ${TMP_BASE}"
+        [ -w "${TMP_BASE}" ] || die "Temporary base directory is not writable: ${TMP_BASE}"
+        # Normalize once so the cleanup guard compares unambiguous paths.
+        TMP_BASE="$(realpath -e -- "${TMP_BASE}")" || die "Cannot resolve temporary base directory"
+        for part in local local_data; do
+                if [ -d "${DXSPATH}/${part}" ]; then
+                        source_kb=$(du -sk -- "${DXSPATH}/${part}" | awk '{print $1}')
+                        required_kb=$(( ${required_kb:-0} + source_kb ))
+                fi
+        done
+        # Additional headroom for Git checkout, metadata and filesystem variance.
+        required_kb=$(( ${required_kb:-0} + 524288 ))
+        available_kb=$(df -Pk -- "${TMP_BASE}" | awk 'END {print $4}')
+        [[ "${available_kb}" =~ ^[0-9]+$ ]] || die "Cannot determine free space on ${TMP_BASE}"
+        if (( available_kb < required_kb )); then
+                die "Insufficient staging space on ${TMP_BASE}: need at least $(( (required_kb + 1023)/1024 )) MiB, available $((available_kb/1024)) MiB. Set TMP_BASE to a directory with enough space. Existing DXSpider tree untouched."
+        fi
+}
+
 
 backup()
 {
@@ -197,8 +241,7 @@ preflight_repo()
 # --- NEW: clone to temp + checkout branch ---
 clone_to_temp()
 {
-        local tmpdir
-        tmpdir="$(mktemp -d "${TMP_BASE}/dxspider.update.XXXXXX")"
+        local tmpdir="$1"
 
         # The temporary directory is created by root, but git clone is run as
         # the DXSpider owner user. Give ownership to that user so it can create
@@ -206,22 +249,21 @@ clone_to_temp()
         chown "$OWNER:$GROUP" "$tmpdir"
         chmod 0755 "$tmpdir"
 
-        # IMPORTANT:
-        # This function is called as: tmpdir="$(clone_to_temp)".
-        # Therefore, stdout must contain ONLY the final temporary path.
-        # All progress messages and git output must go to stderr, otherwise
-        # tmpdir gets polluted with text and rsync may interpret it as a remote host.
+        # Run in the main shell: failures must preserve the EXIT cleanup trap.
         echo -e "Cloning new DXSpider tree into: ${tmpdir}/spider" >&2
         if ! su - "$OWNER" -c "git clone --branch '${BRANCH}' '${REPO_URL}' '${tmpdir}/spider'" >&2; then
                 echo "Dirk clone failed; trying GitHub backup: ${BACKUP_REPO_URL}" >&2
                 rm -rf "${tmpdir}/spider"
-                su - "$OWNER" -c "git clone --branch '${BRANCH}' '${BACKUP_REPO_URL}' '${tmpdir}/spider'" >&2 || die "Both repositories failed; existing installation untouched"
+                if ! su - "$OWNER" -c "git clone --branch '${BRANCH}' '${BACKUP_REPO_URL}' '${tmpdir}/spider'" >&2; then
+                        die "Both repositories failed; existing installation untouched"
+                fi
         fi
 
         # Robust branch checkout:
-        su - "$OWNER" -c "cd '${tmpdir}/spider' && (git checkout '${BRANCH}' || git checkout -B '${BRANCH}' 'origin/${BRANCH}')" >&2
+        if ! su - "$OWNER" -c "cd '${tmpdir}/spider' && (git checkout '${BRANCH}' || git checkout -B '${BRANCH}' 'origin/${BRANCH}')" >&2; then
+                die "Git checkout failed; existing installation untouched"
+        fi
 
-        echo "$tmpdir"
 }
 
 # --- NEW: preserve local + local_data into new tree ---
@@ -809,10 +851,14 @@ update_spider()
         echo -e " "
 
         local tmpdir
-        tmpdir="$(clone_to_temp)"
+        check_update_staging_space
+        tmpdir="$(mktemp -d "${TMP_BASE}/dxspider.update.XXXXXX")"
+        UPDATE_TMP_ACTIVE="${tmpdir}"
+        clone_to_temp "${tmpdir}"
         preserve_runtime_data "${DXSPATH}" "${tmpdir}/spider"
         swap_tree "${tmpdir}"
-        rm -rf "${tmpdir}" || true
+        cleanup_update_temp
+        UPDATE_TMP_ACTIVE=""
 
         # Dependencies were installed and verified before replacing DXSpider.
 
