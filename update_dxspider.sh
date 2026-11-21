@@ -7,8 +7,8 @@
 # Create By Kin, EA3CV and based on the code of Yiannis Panagou, SV5FRI
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.6.17
-# Date 20261118
+# Version 0.6.19
+# Date 20261121
 #
 
 set -Eeuo pipefail
@@ -137,7 +137,7 @@ check_update_staging_space()
         [ -w "${TMP_BASE}" ] || die "Temporary base directory is not writable: ${TMP_BASE}"
         # Normalize once so the cleanup guard compares unambiguous paths.
         TMP_BASE="$(realpath -e -- "${TMP_BASE}")" || die "Cannot resolve temporary base directory"
-        for part in local local_data; do
+        for part in local local_data connect scripts local_cmd; do
                 if [ -d "${DXSPATH}/${part}" ]; then
                         source_kb=$(du -sk -- "${DXSPATH}/${part}" | awk '{print $1}')
                         required_kb=$(( ${required_kb:-0} + source_kb ))
@@ -200,7 +200,12 @@ backup()
         stage="$(mktemp -d "${parent%/}/dxspider.backup-build.XXXXXX")"
         BACKUP_STAGE_ACTIVE="${stage}"
         # Failures before installation remove only the newly built staging copy.
-        if ! cp -a -- "${DXSPATH}" "${stage}/spider"; then
+        # The snapshot is made as the actual DXSpider Unix account, not root.
+        # The parent and staging directory remain managed by root; only this
+        # private staging directory is delegated to the owner.
+        chown -- "$OWNER:$GROUP" "$stage"
+        chmod 0700 "$stage"
+        if ! runuser -u "$OWNER" -- cp -a -- "${DXSPATH}" "${stage}/spider"; then
                 rm -rf -- "${stage}"
                 die "Backup copy failed; previous backup preserved"
         fi
@@ -391,25 +396,29 @@ clone_to_temp()
 
 }
 
-# --- NEW: preserve local + local_data into new tree ---
+# Preserve site-owned runtime directories, without following symlinks.
 preserve_runtime_data()
 {
-        local old="$1"
-        local new="$2"
-
-        # Preserve local/ if exists (DXVars.pm, Listeners.pm, etc.)
-        if [ -d "${old}/local" ]; then
-                echo "Preserving ${old}/local -> ${new}/local"
-                mkdir -p "${new}/local"
-                rsync -a "${old}/local/" "${new}/local/"
-        fi
-
-        # Preserve local_data/ if exists (user DB etc.)
-        if [ -d "${old}/local_data" ]; then
-                echo "Preserving ${old}/local_data -> ${new}/local_data"
-                mkdir -p "${new}/local_data"
-                rsync -a "${old}/local_data/" "${new}/local_data/"
-        fi
+        local old="$1" new="$2" part
+        for part in local local_data connect scripts local_cmd; do
+                if [ -L "${old}/${part}" ]; then
+                        die "Refusing to migrate symlinked runtime directory: ${old}/${part}"
+                fi
+                if [ -e "${old}/${part}" ] && [ ! -d "${old}/${part}" ]; then
+                        die "Runtime path is not a directory: ${old}/${part}"
+                fi
+                if [ -d "${old}/${part}" ]; then
+                        echo "Preserving ${old}/${part} -> ${new}/${part}"
+                        # The installed runtime tree is authoritative. Remove
+                        # upstream copies first to avoid retaining stale files.
+                        if [ -e "${new}/${part}" ] || [ -L "${new}/${part}" ]; then
+                                rm -rf -- "${new}/${part}"
+                        fi
+                        mkdir -- "${new}/${part}"
+                        rsync -a -- "${old}/${part}/" "${new}/${part}/" ||
+                                die "Unable to preserve ${part}"
+                fi
+        done
 }
 
 # --- NEW: atomic-ish swap ---
@@ -432,50 +441,19 @@ swap_tree()
                 SWAP_HELD_ACTIVE=""
                 die "New tree activation failed; original restored"
         fi
-        chown -R "$OWNER:$GROUP" "${oldtree}"
-        cd "${oldtree}"
-        find ./ -type d -exec chmod 2775 {} \;
-        find ./ -type f -exec chmod 775 {} \;
+        # Preserve original runtime permissions; do not alter the home directory.
 }
 
 config_app()
 {
-        echo "Fix up permissions"
-        echo -e " "
-        echo -e "Please use capital letters"
-        echo -e " "
-
-        cd "${DXSPATH}"
-
-        # The tree has already been freshly cloned and checked out.
-        # Do not run another pull here; it can introduce unrelated failures.
-        su - "$OWNER" -c "cd '${DXSPATH}' && git status --short >/dev/null"
-
-        chown -R "$OWNER:$GROUP" "${DXSPATH}"
-        cd "${DXSPATH}"
-        find ./ -type d -exec chmod 2775 {} \;
-        find ./ -type f -exec chmod 775 {} \;
-
-        su - "$OWNER" -c "mkdir -p '${DXSPATH}/local' '${DXSPATH}/cmd_import' '${DXSPATH}/local_cmd' '${DXSPATH}/local_data'"
-
-        # Only copy DXVars.pm.issue if DXVars doesn't exist
-        if [ ! -f "${DXSPATH}/local/DXVars.pm" ]; then
-                su - "$OWNER" -c "cp '${DXSPATH}/perl/DXVars.pm.issue' '${DXSPATH}/local/DXVars.pm'"
-        fi
-
-        insert_cluster_call
-        insert_call
-        insert_name
-        insert_email
-        insert_locator
-        insert_qth
-
-        echo -e "Now create basic user file"
-        su - "$OWNER" -c "'${DXSPATH}/perl/create_sysop.pl'"
-        echo -e " "
-        echo -e "Installation has been finished."
-        echo -e "Now login as ${OWNER} user."
-        echo -e "Start application and check if everything is ok with: ${DXSPATH}/perl/cluster.pl"
+        # This is an UPDATE, not a fresh installation. Never prompt for
+        # identity fields or invoke create_sysop.pl: it can delete and recreate
+        # DXUser records, losing passwords and persistent attributes.
+        [ -f "${DXSPATH}/local/DXVars.pm" ] ||
+                die "Existing DXVars.pm missing after migration; refusing to reinitialize SYSOP"
+        [ -d "${DXSPATH}/local_data" ] ||
+                die "Existing local_data missing after migration; refusing to reinitialize SYSOP"
+        echo "Existing DXSpider configuration and SYSOP database preserved."
 }
 
 create_service()
@@ -689,7 +667,7 @@ PERL
 # Enter CallSign for cluster
 insert_cluster_call()
 {
-        echo -n "Please enter CallSign for DxCluster: "
+        echo -n "Please enter your DXCluster NODE callsign: "
         chr="\""
         read -r DXCALL
         echo "${DXCALL}"
@@ -700,7 +678,7 @@ insert_cluster_call()
 # Enter your CallSign
 insert_call()
 {
-        echo -n "Please enter your CallSign: "
+        echo -n "Please enter your SYSOP callsign: "
         chr="\""
         read -r SELFCALL
         echo "${SELFCALL}"
@@ -931,9 +909,7 @@ run_restore()
                 cp -a "${BACKUP_DIR}/spider" "${OLD_DXS_PATH}"
 
                 cd "${OLD_DXS_PATH}"
-                chown -R "$OWNER:$GROUP" "${OLD_DXS_PATH}"
-                find ./ -type d -exec chmod 2775 {} \;
-                find ./ -type f -exec chmod 775 {} \;
+                # cp -a restores the backed-up ownership and permissions.
 
                 if [ -f "${BACKUP_DIR}/dxspider.service" ]; then
                         cp -f "${BACKUP_DIR}/dxspider.service" "$OLD_SERVICE_PATH" || true
