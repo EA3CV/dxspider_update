@@ -6,8 +6,8 @@
 #
 # Fallback (optional): if bundle is missing, it can clone from REPO_URL.
 #
-# Version: 2.13
-# Date: 20261118
+# Version: 2.14
+# Date: 20261121
 
 set -Eeuo pipefail
 
@@ -41,7 +41,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 : "${BUNDLE_URL:=}"
 : "${BUNDLE_SHA_URL:=}"
 
-: "${FORCE:=0}"            # 1 -> delete existing SPIDER_DIR before clone
+: "${FORCE:=0}"            # Deprecated: never bypass interactive confirmation
 : "${NONINTERACTIVE:=0}"   # 1 -> requires DX* vars below
 
 # If NONINTERACTIVE=1, provide:
@@ -53,6 +53,71 @@ have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 require_root() {
   [[ "$(id -u)" -eq 0 ]] || die "This script must be run as root."
+}
+
+# ----------------------------
+# Preserve by default: authorize replacement before ANY changes.
+# ----------------------------
+EXISTING_INSTALL=0
+validate_install_paths() {
+  local path parent resolved
+  [[ "$SPIDER_DIR" = /* && "$SPIDER_LINK" = /* && "$SPIDER_HOME" = /* ]] || die "Installation paths must be absolute."
+  [[ "$SPIDER_DIR" != / && "$SPIDER_DIR" != /home && "$SPIDER_DIR" != "$SPIDER_HOME" ]] || die "Unsafe installation directory."
+  [[ "$SPIDER_LINK" != / && "$SPIDER_LINK" != "$SPIDER_DIR" ]] || die "Unsafe SPIDER_LINK."
+  [[ "$SPIDER_DIR" == "$SPIDER_HOME"/* ]] || die "SPIDER_DIR must be below SPIDER_HOME."
+  [[ "$SPIDER_DIR" == "$SPIDER_HOME/spider" ]] || die "Only the dedicated spider directory can be replaced."
+  [[ ! -L "$SPIDER_DIR" ]] || die "SPIDER_DIR is a symlink; refusing removal."
+  parent="$(dirname -- "$SPIDER_DIR")"
+  if [[ -e "$parent" ]]; then
+    resolved="$(realpath -e -- "$parent")" || die "Cannot resolve installation parent."
+    [[ "$resolved" == "$(realpath -m -- "$SPIDER_HOME")" || "$resolved" == "$(realpath -e -- "$SPIDER_HOME" 2>/dev/null || true)" ]] || die "Installation parent resolves outside SPIDER_HOME."
+  fi
+  [[ ! -L "$SPIDER_HOME" ]] || die "SPIDER_HOME is a symlink; refusing automatic removal."
+  if [[ -e "$SPIDER_LINK" || -L "$SPIDER_LINK" ]]; then
+    [[ -L "$SPIDER_LINK" ]] || die "SPIDER_LINK exists but is not a symlink; refusing to modify it."
+    [[ "$(readlink -- "$SPIDER_LINK")" == "$SPIDER_DIR" ]] || die "SPIDER_LINK points elsewhere; refusing to modify it."
+  fi
+}
+
+confirm_existing_install() {
+  local reply
+  validate_install_paths
+  if [[ -e "$SPIDER_DIR" ]]; then
+    EXISTING_INSTALL=1
+    echo "An existing DXSpider installation has been detected at:"
+    echo "$SPIDER_DIR"
+    if [[ ! -t 0 || "$NONINTERACTIVE" == 1 ]]; then
+      die "Existing installation preserved. Interactive confirmation required; FORCE does not bypass it."
+    fi
+    while true; do
+      read -r -p 'Do you want to completely remove the existing installation? [y/N]: ' reply || reply=N
+      case "$reply" in
+        y|Y) break ;;
+        ''|n|N) log "The existing DXSpider installation has been preserved. Installation cancelled. No changes have been made."; exit 0 ;;
+        *) echo 'Please answer y or N.' ;;
+      esac
+    done
+    echo 'WARNING: All data belonging to this DXSpider installation will be permanently deleted,'
+    echo 'including configuration, databases, scripts and local customizations.'
+    echo 'Proceeding with a clean installation...'
+  fi
+}
+
+remove_existing_install() {
+  [[ "$EXISTING_INSTALL" == 1 ]] || return 0
+  validate_install_paths
+  # Never delete an installation while its daemon may still be writing data.
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet dxspider.service; then
+    systemctl stop dxspider.service || die "Could not stop DXSpider; installation preserved."
+    systemctl is-active --quiet dxspider.service && die "DXSpider still active; refusing removal."
+  fi
+  # Refuse untracked manual instances rather than killing unrelated processes.
+  if command -v pgrep >/dev/null 2>&1 && pgrep -f '[/]perl/cluster[.]pl|(^|/)cluster[.]pl' >/dev/null; then
+    die "A cluster.pl process is still running; stop it and retry."
+  fi
+  [[ -d "$SPIDER_DIR" && ! -L "$SPIDER_DIR" ]] || die "Installation directory changed; refusing removal."
+  rm -rf -- "$SPIDER_DIR" || die "Could not remove previous installation."
+  log "Removed previous DXSpider tree: $SPIDER_DIR"
 }
 
 # ----------------------------
@@ -148,21 +213,18 @@ run_actions_for_distro() {
 install_epel_8() {
   log "Enabling EPEL (8.x)..."
   dnf -y makecache --refresh || true
-  dnf -y update
   dnf -y install epel-release || true
 }
 
 install_epel_9() {
   log "Enabling EPEL (9.x)..."
   dnf -y makecache --refresh || true
-  dnf -y update
   dnf -y install epel-release || true
 }
 
 install_package_CentOS_8() {
   log "Installing dependencies (RHEL-like 8.x)..."
   dnf -y makecache --refresh || true
-  dnf -y update
 
   dnf -y install \
     git curl gzip coreutils procps-ng \
@@ -186,7 +248,6 @@ install_package_CentOS_8() {
 install_package_Rocky_9() {
   log "Installing dependencies (RHEL-like 9.x / Fedora mapping)..."
   dnf -y makecache --refresh || true
-  dnf -y update
 
   dnf -y install \
     git curl gzip coreutils procps-ng \
@@ -212,7 +273,6 @@ install_package_debian() {
   export DEBIAN_FRONTEND=noninteractive
 
   apt-get update -y
-  apt-get upgrade -y
 
   apt-get install -y \
     perl git rsync curl iproute2 gzip procps build-essential cpanminus libssl-dev zlib1g-dev \
@@ -301,16 +361,6 @@ ensure_user() {
 
 prepare_paths() {
   mkdir -p "${SPIDER_HOME}"
-  chown "${SYSOP_USER}:${SPIDER_GROUP}" "${SPIDER_HOME}"
-
-  if [[ -d "${SPIDER_DIR}" && -n "$(ls -A "${SPIDER_DIR}" 2>/dev/null || true)" ]]; then
-    if [[ "${FORCE}" == "1" ]]; then
-      log "FORCE=1: removing existing '${SPIDER_DIR}'..."
-      rm -rf "${SPIDER_DIR}"
-    else
-      log "Directory '${SPIDER_DIR}' exists and is not empty (not deleting)."
-    fi
-  fi
 
   mkdir -p "${SPIDER_DIR}"
   chown "${SYSOP_USER}:${SPIDER_GROUP}" "${SPIDER_DIR}"
@@ -320,7 +370,7 @@ prepare_paths() {
     if [[ -d "${SPIDER_LINK}" && -n "$(ls -A "${SPIDER_LINK}" 2>/dev/null || true)" ]]; then
       die "'${SPIDER_LINK}' exists as a non-empty directory. Resolve it manually or change SPIDER_LINK."
     fi
-    rm -rf "${SPIDER_LINK}"
+    die "SPIDER_LINK is not a symlink; refusing to delete it."
   fi
   ln -sfn "${SPIDER_DIR}" "${SPIDER_LINK}"
 }
@@ -372,24 +422,14 @@ clone_from_bundle() {
   chown "${SYSOP_USER}:${SPIDER_GROUP}" "${bundle_file}"
   chmod 0644 "${bundle_file}"
 
-  # Destination must be empty or FORCE=1
-  if [[ -d "${SPIDER_DIR}" && -n "$(ls -A "${SPIDER_DIR}" 2>/dev/null || true)" ]]; then
-    if [[ "${FORCE}" == "1" ]]; then
-      log "FORCE=1: removing existing '${SPIDER_DIR}' before bundle clone..."
-      rm -rf "${SPIDER_DIR}"
-    else
-      die "Destination '${SPIDER_DIR}' is not empty. Use FORCE=1 to replace it."
-    fi
-  fi
-
-  mkdir -p "$(dirname "${SPIDER_DIR}")"
-  chown "${SYSOP_USER}:${SPIDER_GROUP}" "$(dirname "${SPIDER_DIR}")" || true
-  rm -rf "${SPIDER_DIR}"
+  [[ ! -e "${SPIDER_DIR}" || -z "$(ls -A "${SPIDER_DIR}" 2>/dev/null || true)" ]] || die "Destination is not empty; refusing overwrite."
+  # git clone requires an absent destination or an empty directory.
+  [[ ! -e "${SPIDER_DIR}" ]] || rmdir -- "${SPIDER_DIR}" || die "Cannot prepare empty destination."
 
   log "Cloning DXSpider from bundle into ${SPIDER_DIR}..."
   su - "${SYSOP_USER}" -c "git clone '${bundle_file}' '${SPIDER_DIR}'"
 
-  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && (git checkout '${BRANCH}' || git checkout -b '${BRANCH}' 'origin/${BRANCH}' || true)"
+  su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && (git checkout '${BRANCH}' || git checkout -b '${BRANCH}' 'origin/${BRANCH}')"
 
   log "Bundle clone check (must show tags/history):"
   su - "${SYSOP_USER}" -c "cd '${SPIDER_DIR}' && git describe --tags --long --always"
@@ -495,8 +535,8 @@ prompt_var() {
 
 configure_dxvars() {
   log "Configuring /spider/local/DXVars.pm ..."
-  prompt_var DXCLUSTER_CALL "Please enter CallSign for DxCluster (mycall)" ""
-  prompt_var SELFCALL       "Please enter your CallSign (myalias)" ""
+  prompt_var DXCLUSTER_CALL "Please enter your DXCluster NODE callsign" ""
+  prompt_var SELFCALL       "Please enter your SYSOP callsign" ""
   prompt_var MYNAME         "Please enter your Name (myname)" ""
   prompt_var EMAIL          "Please enter your E-mail Address (myemail)" ""
   prompt_var MYLOCATOR      "Please enter your Locator (mylocator, uppercase recommended)" ""
@@ -539,7 +579,6 @@ fix_permissions() {
   if compgen -G "${SPIDER_LINK}/perl/*dbg" >/dev/null; then
     for f in ${SPIDER_LINK}/perl/*dbg; do
       ln -sfn "$f" "/usr/local/bin/$(basename "$f")"
-      chmod 0775 "/usr/local/bin/$(basename "$f")" || true
     done
   fi
 }
@@ -609,6 +648,8 @@ EOF
 
 main() {
   require_root
+  confirm_existing_install
+  remove_existing_install
   run_actions_for_distro
 
   ensure_group
