@@ -7,8 +7,8 @@
 # Create By Kin, EA3CV and based on the code of Yiannis Panagou, SV5FRI
 #
 # E-mail: ea3cv@cronux.net
-# Version 0.6.19
-# Date 20261121
+# Version 0.6.22
+# Date 20261122
 #
 
 set -Eeuo pipefail
@@ -63,6 +63,11 @@ UPDATE_FINISHED=0
 BACKUP_STAGE_ACTIVE=""
 BACKUP_PREVIOUS_ACTIVE=""
 DXSPIDER_WAS_ACTIVE=0
+BACKUP_REQUESTED=1
+UPDATE_TRANSACTION_STARTED=0
+WEB_STOPPED=()
+ORIGINAL_SERVICE_SNAPSHOT=""
+ORIGINAL_SERVICE_EXISTED=0
 cleanup_update_exit()
 {
         local rc=$? failed_tree="" rollback_ok=1
@@ -84,8 +89,10 @@ cleanup_update_exit()
                 if [ "${rollback_ok}" -eq 1 ] && mv -- "${SWAP_HELD_ACTIVE}" "${DXSPATH}"; then
                         SWAP_HELD_ACTIVE=""
                         if [ "${OLD_TYPE}" = "service" ]; then
-                                if [ -f "${BACKUP_DIR}/dxspider.service" ]; then
-                                        cp -a -- "${BACKUP_DIR}/dxspider.service" "${OLD_SERVICE_PATH}" || rollback_ok=0
+                                if [ "${ORIGINAL_SERVICE_EXISTED}" -eq 1 ]; then
+                                        cp -a -- "${ORIGINAL_SERVICE_SNAPSHOT}" "${OLD_SERVICE_PATH}" || rollback_ok=0
+                                else
+                                        rm -f -- "${OLD_SERVICE_PATH}" || rollback_ok=0
                                 fi
                                 systemctl daemon-reload || rollback_ok=0
                                 if [ "${DXSPIDER_WAS_ACTIVE}" -eq 1 ]; then
@@ -116,6 +123,38 @@ cleanup_update_exit()
                         echo "WARNING: older backup preserved at ${BACKUP_PREVIOUS_ACTIVE}" >&2
                 fi
         fi
+        # Restore the service state on failures even before the tree swap.
+        if [ "${UPDATE_FINISHED}" -ne 1 ] && [ "${UPDATE_TRANSACTION_STARTED}" -eq 1 ]; then
+                if [ -n "${SWAP_HELD_ACTIVE}" ]; then
+                        echo "CRITICAL: original tree is not restored; services will remain stopped" >&2
+                        rollback_ok=0
+                elif [ "${OLD_TYPE}" = "service" ]; then
+                        if [ "${ORIGINAL_SERVICE_EXISTED}" -eq 1 ] && [ -f "${ORIGINAL_SERVICE_SNAPSHOT}" ]; then
+                                cp -a -- "${ORIGINAL_SERVICE_SNAPSHOT}" "${OLD_SERVICE_PATH}" || rollback_ok=0
+                        elif [ "${ORIGINAL_SERVICE_EXISTED}" -eq 0 ]; then
+                                rm -f -- "${OLD_SERVICE_PATH}" || rollback_ok=0
+                        fi
+                        systemctl daemon-reload || rollback_ok=0
+                        if [ "${DXSPIDER_WAS_ACTIVE}" -eq 1 ]; then
+                                systemctl restart dxspider.service || rollback_ok=0
+                        else
+                                systemctl stop dxspider.service || rollback_ok=0
+                        fi
+                fi
+                local web_service
+                if [ "${rollback_ok}" -eq 1 ]; then
+                        for web_service in "${WEB_STOPPED[@]}"; do
+                                systemctl start "$web_service" || rollback_ok=0
+                        done
+                fi
+                if [ "${rollback_ok}" -ne 1 ]; then
+                        echo "CRITICAL: recovery requires manual inspection" >&2
+                        rc=1
+                fi
+        fi
+        if [ -n "${ORIGINAL_SERVICE_SNAPSHOT}" ] && [ -f "${ORIGINAL_SERVICE_SNAPSHOT}" ]; then
+                rm -f -- "${ORIGINAL_SERVICE_SNAPSHOT}" || true
+        fi
         if ! cleanup_update_temp; then
                 echo "WARNING: staging cleanup incomplete; manual inspection required" >&2
                 [ "${rc}" -ne 0 ] || rc=1
@@ -127,28 +166,45 @@ trap 'die "Aborted at line $LINENO (command: $BASH_COMMAND)"' ERR
 
 check_update_staging_space()
 {
-        local required_kb available_kb source_kb=0 part
-        # Use the installation parent by default, regardless of root's $HOME.
-        # This keeps staging on the same filesystem as the installed tree.
+        local install_kb runtime_kb=0 required_kb available_kb deficit_kb backup_kb=0 part
         if [ -z "${TMP_BASE}" ]; then
                 TMP_BASE="$(dirname -- "${DXSPATH}")"
         fi
         [ -d "${TMP_BASE}" ] || die "Temporary base directory does not exist: ${TMP_BASE}"
         [ -w "${TMP_BASE}" ] || die "Temporary base directory is not writable: ${TMP_BASE}"
-        # Normalize once so the cleanup guard compares unambiguous paths.
         TMP_BASE="$(realpath -e -- "${TMP_BASE}")" || die "Cannot resolve temporary base directory"
+        [ "$(stat -c %d -- "${DXSPATH}")" = "$(stat -c %d -- "${TMP_BASE}")" ] ||
+                die "Staging and DXSpider must be on the same filesystem"
+        install_kb="$(du -sk -- "${DXSPATH}" | awk '{print $1}')"
         for part in local local_data connect scripts local_cmd; do
                 if [ -d "${DXSPATH}/${part}" ]; then
-                        source_kb=$(du -sk -- "${DXSPATH}/${part}" | awk '{print $1}')
-                        required_kb=$(( ${required_kb:-0} + source_kb ))
+                        runtime_kb=$((runtime_kb + $(du -sk -- "${DXSPATH}/${part}" | awk '{print $1}')))
                 fi
         done
-        # Additional headroom for Git checkout, metadata and filesystem variance.
-        required_kb=$(( ${required_kb:-0} + 524288 ))
-        available_kb=$(df -Pk -- "${TMP_BASE}" | awk 'END {print $4}')
+        # Staged Git tree, runtime copy, filesystem headroom. Original tree
+        # stays in place (renamed, not copied) for rollback.
+        required_kb=$((install_kb + runtime_kb + 524288))
+        available_kb="$(df -Pk -- "${TMP_BASE}" | awk 'END {print $4}')"
         [[ "${available_kb}" =~ ^[0-9]+$ ]] || die "Cannot determine free space on ${TMP_BASE}"
+        echo "Update staging: required $(( (required_kb+1023)/1024 )) MiB; available $((available_kb/1024)) MiB"
         if (( available_kb < required_kb )); then
-                die "Insufficient staging space on ${TMP_BASE}: need at least $(( (required_kb + 1023)/1024 )) MiB, available $((available_kb/1024)) MiB. Set TMP_BASE to a directory with enough space. Existing DXSpider tree untouched."
+                deficit_kb=$((required_kb-available_kb))
+                die "Insufficient disk space: missing $(( (deficit_kb+1023)/1024 )) MiB. Existing DXSpider untouched."
+        fi
+        if [ "${BACKUP_REQUESTED}" -eq 1 ]; then
+                local parent backup_available
+                parent="$(realpath -e -- "$(dirname -- "${BACKUP_DIR}")")" || die "Backup parent unavailable"
+                backup_available="$(df -Pk -- "${parent}" | awk 'END {print $4}')"
+                backup_kb=$((install_kb + 262144))
+                # If both destinations share a filesystem, reserve both at once.
+                if [ "$(stat -c %d -- "${parent}")" = "$(stat -c %d -- "${TMP_BASE}")" ]; then
+                        backup_kb=$((backup_kb + required_kb))
+                fi
+                echo "Backup filesystem: required $(( (backup_kb+1023)/1024 )) MiB; available $((backup_available/1024)) MiB"
+                if (( backup_available < backup_kb )); then
+                        deficit_kb=$((backup_kb-backup_available))
+                        die "Insufficient disk space for backup and update: missing $(( (deficit_kb+1023)/1024 )) MiB. Existing DXSpider untouched."
+                fi
         fi
 }
 
@@ -400,6 +456,9 @@ clone_to_temp()
 preserve_runtime_data()
 {
         local old="$1" new="$2" part
+        if [ -n "$(manual_spider_pids)" ]; then
+                die "DXSpider process detected during runtime copy; SQLite snapshot would be unsafe"
+        fi
         for part in local local_data connect scripts local_cmd; do
                 if [ -L "${old}/${part}" ]; then
                         die "Refusing to migrate symlinked runtime directory: ${old}/${part}"
@@ -428,8 +487,6 @@ swap_tree()
         local newtree="${tmpdir}/spider"
         local oldtree="${DXSPATH}"
         local held="${tmpdir}/previous-spider"
-        [ -f "${BACKUP_DIR}/spider/perl/cluster.pl" ] || die "Rollback backup missing"
-        [ -f "${BACKUP_DIR}/config.backup" ] || die "Rollback metadata missing"
         [ -d "${newtree}" ] || die "Staged tree missing"
         [ ! -e "${held}" ] || die "Unexpected previous tree"
         [ "$(stat -c %d -- "${oldtree}")" = "$(stat -c %d -- "${tmpdir}")" ] || die "Staging must be on the same filesystem"
@@ -763,7 +820,7 @@ is_backup()
 # A matching process blocks an unattended update; it is never killed here.
 manual_spider_pids()
 {
-        local target pid proc arg cwd candidate
+        local target pid proc arg cwd candidate cmd exe
         local -a argv=()
         target=$(readlink -f -- "${DXSPATH}/perl/cluster.pl") || return 1
         for proc in /proc/[0-9]*; do
@@ -771,21 +828,28 @@ manual_spider_pids()
                 pid=${proc##*/}
                 argv=()
                 mapfile -d '' -t argv < "${proc}/cmdline" 2>/dev/null || continue
-                cwd=$(readlink -f -- "${proc}/cwd" 2>/dev/null || true)
+                cwd=$(readlink -- "${proc}/cwd" 2>/dev/null || true)
+                # /proc/PID/cwd may refer to a renamed/deleted directory after
+                # an earlier updater swap. Do not rely solely on realpath.
                 for arg in "${argv[@]}"; do
                         case "$arg" in
-                                cluster.pl|*/cluster.pl)
+                                cluster.pl|./cluster.pl|*/cluster.pl)
+                                        candidate=""
                                         if [[ "$arg" = /* ]]; then
                                                 candidate=$(readlink -f -- "$arg" 2>/dev/null || true)
                                         elif [ -n "$cwd" ]; then
                                                 candidate=$(readlink -f -- "${cwd}/${arg}" 2>/dev/null || true)
-                                        else
-                                                candidate=""
                                         fi
-                                        if [ -n "$candidate" ] && [ "$candidate" = "$target" ]; then
+                                        if [ "$candidate" = "$target" ] ||
+                                           [[ "$cwd" = "${DXSPATH}/perl" || "$cwd" = "${DXSPATH}/perl (deleted)" || "$cwd" = "${DXSPATH}/perl/"* ]] ||
+                                           [[ "$cwd" = *"/previous-spider/perl"* || "$cwd" = *"/failed-new-spider/perl"* ]]; then
                                                 printf '%s\n' "$pid"
-                                                break
-                                        fi ;;
+                                        else
+                                                # Ambiguous cluster.pl: refuse to copy an
+                                                # active SQLite database rather than guess.
+                                                printf '%s\n' "$pid"
+                                        fi
+                                        break ;;
                         esac
                 done
         done
@@ -808,21 +872,40 @@ require_manual_spider_stopped()
 
 is_service()
 {
-        local load_state=""
+        local load_state="" active_state="" manual_pids=""
+        # A leftover unit file does not mean that the selected DXSpider tree
+        # is managed by systemd. Never turn a manual instance into a service.
+        manual_pids=$(manual_spider_pids) || die "Cannot inspect DXSpider processes"
         if command -v systemctl >/dev/null 2>&1; then
                 load_state=$(systemctl show dxspider.service -p LoadState --value 2>/dev/null || true)
+                active_state=$(systemctl is-active dxspider.service 2>/dev/null || true)
         fi
-        STATUS=$(systemctl is-active dxspider.service 2>/dev/null || true)
-
-        if [ "${load_state}" = "loaded" ]; then
+        STATUS="$active_state"
+        if [ -n "$manual_pids" ] && [ "$active_state" != "active" ]; then
+                OLD_TYPE="pid"
+                echo "DXSpider is running manually; existing service unit will be ignored."
+        elif [ "$load_state" = "loaded" ] && [ "$active_state" = "active" ]; then
                 OLD_TYPE="service"
-                OLD_SERVICE_PATH="/etc/systemd/system/dxspider.service"
-                echo "DXSpider is using systemctl."
+                echo "DXSpider is running under systemctl."
         else
                 OLD_TYPE="pid"
-                PID=""
-                echo "DXSpider has no loaded systemd service (manual mode)."
+                echo "DXSpider is in manual mode (systemd service inactive or absent)."
         fi
+}
+
+verify_dxspider_service()
+{
+        local i state mainpid
+        # A transient systemd 'active' immediately after restart is insufficient.
+        for i in 1 2 3 4 5; do
+                sleep 1
+                state=$(systemctl is-active dxspider.service 2>/dev/null || true)
+                mainpid=$(systemctl show dxspider.service -p MainPID --value 2>/dev/null || true)
+                if [ "$state" != "active" ] || ! [[ "$mainpid" =~ ^[1-9][0-9]*$ ]] || ! kill -0 "$mainpid" 2>/dev/null; then
+                        die "DXSpider service failed post-update verification (state=$state, PID=$mainpid)"
+                fi
+        done
+        echo "DXSpider service verified active for 5 seconds."
 }
 
 is_spider()
@@ -915,10 +998,11 @@ run_restore()
                         cp -f "${BACKUP_DIR}/dxspider.service" "$OLD_SERVICE_PATH" || true
                 fi
                 systemctl daemon-reload || true
-                systemctl enable dxspider || true
-                systemctl restart dxspider || true
+                if [ "${OLD_TYPE}" = "service" ]; then
+                        systemctl restart dxspider || true
+                fi
                 echo "Backup restored."
-                echo "DXSpider running."
+                echo "Verify DXSpider startup using the original method."
                 echo "Bye!"
         else
                 echo "Error in ${BACKUP_DIR}/config.backup"
@@ -931,7 +1015,9 @@ stop_spider()
         if [ "${OLD_TYPE}" = "pid" ]; then
                 require_manual_spider_stopped
         else
-                systemctl stop dxspider.service || die "Unable to stop dxspider.service"
+                if [ "${DXSPIDER_WAS_ACTIVE}" -eq 1 ]; then
+                        systemctl stop dxspider.service || die "Unable to stop dxspider.service"
+                fi
         fi
 }
 
@@ -952,7 +1038,19 @@ update_spider()
         tmpdir="$(mktemp -d "${TMP_BASE}/dxspider.update.XXXXXX")"
         UPDATE_TMP_ACTIVE="${tmpdir}"
         clone_to_temp "${tmpdir}"
+        # A consistent SQLite copy requires a quiescent source. In manual
+        # mode the operator must stop DXSpider; systemd mode stops it here.
+        stop_spider
+        # Recheck after stopping to catch a concurrent manual restart.
+        if [ -n "$(manual_spider_pids)" ]; then
+                die "A cluster.pl process is still running; refusing live database copy"
+        fi
         preserve_runtime_data "${DXSPATH}" "${tmpdir}/spider"
+        if [ -d "${DXSPATH}/data" ]; then
+                mkdir -p "${tmpdir}/spider/local_data"
+                cp -a -- "${DXSPATH}/data/." "${tmpdir}/spider/local_data/." ||
+                        die "Unable to migrate legacy data into staging"
+        fi
         swap_tree "${tmpdir}"
         # Keep staging and old installation until configuration and service succeed.
 
@@ -967,7 +1065,7 @@ welcome()
         echo -e " "
         echo -e "==============================================================="
         echo -e " "
-        echo -e "This script update will make a Backup of the current DXSpider"
+        echo -e "This script can make a Backup of the current DXSpider"
         echo -e "software in the ${BACKUP_DIR} directory"
         echo -e "Users, DB and configuration files will be maintained."
         echo -e " "
@@ -1005,39 +1103,63 @@ welcome()
                 if [ "${OLD_TYPE}" = "pid" ]; then
                         require_manual_spider_stopped
                 fi
-                # Stop optional web services only when their units exist.
-                # Do not enable, disable or restart them.
+                is_backup
+                echo "Do you want to make a backup? (Recommended) [Y/n]: "
+                read -r YESNO
+                case "${YESNO^^}" in
+                        ""|Y) BACKUP_REQUESTED=1 ;;
+                        N) BACKUP_REQUESTED=0; echo "No permanent backup will be created or replaced." ;;
+                        *) die "Invalid backup response" ;;
+                esac
+                # All capacity checks run before services are stopped or data changed.
+                check_update_staging_space
+                preflight_repo
+                check_distro
+                ensure_extra_perl_modules
+                # The original tree is the temporary rollback source, even when
+                # the user declines a persistent backup.
+                if [ "${OLD_TYPE}" = "service" ] && [ "$(systemctl is-active dxspider.service 2>/dev/null || true)" = "active" ]; then
+                        DXSPIDER_WAS_ACTIVE=1
+                fi
+                if [ -f "${OLD_SERVICE_PATH}" ]; then
+                        ORIGINAL_SERVICE_EXISTED=1
+                        ORIGINAL_SERVICE_SNAPSHOT="$(mktemp "${TMP_BASE}/dxspider.service.XXXXXX")"
+                        cp -a -- "${OLD_SERVICE_PATH}" "${ORIGINAL_SERVICE_SNAPSHOT}"
+                fi
+                UPDATE_TRANSACTION_STARTED=1
+                # Stop optional web services only when active; remember their state.
                 if command -v systemctl >/dev/null 2>&1; then
                         for web_service in dxweb.service dxweb-admin.service; do
-                                web_load_state="$(systemctl show "$web_service" -p LoadState --value 2>/dev/null || true)"
-                                if [ "$web_load_state" = "loaded" ]; then
-                                        echo "Stopping $web_service ..."
+                                if [ "$(systemctl is-active "$web_service" 2>/dev/null || true)" = "active" ]; then
+                                        WEB_STOPPED+=("$web_service")
                                         systemctl stop "$web_service" || die "Unable to stop $web_service"
-                                        web_active_state="$(systemctl is-active "$web_service" 2>/dev/null || true)"
-                                        [ "$web_active_state" != "active" ] && [ "$web_active_state" != "activating" ] ||
-                                                die "$web_service is still running"
                                 fi
                         done
                 fi
-                backup
-                check_distro
-                ensure_extra_perl_modules
-
-                # Keep your original local_data copy (but safe with mkdir -p)
-                mkdir -p "${DXSPATH}/local_data"
-                if [ -d "${DXSPATH}/data" ]; then
-                        cp -a "${DXSPATH}/data/." "${DXSPATH}/local_data/." || true
+                if [ "${BACKUP_REQUESTED}" -eq 1 ]; then
+                        backup
                 fi
-
+                # Avoid modifying the original runtime tree before commit.
+                # The legacy data/ migration is performed in the staged tree.
                 update_spider
                 config_app
                 ensure_userdsn
                 ensure_registration_config
-                create_service
-                enable_service
+                # Preserve the original startup method and existing unit file.
+                # Never create, enable or rewrite a service during an update.
+                if [ "${OLD_TYPE}" = "service" ] && [ "${DXSPIDER_WAS_ACTIVE}" -eq 1 ]; then
+                        systemctl restart dxspider.service || die "Unable to restart existing DXSpider service"
+                        verify_dxspider_service
+                else
+                        echo "Manual startup mode preserved; DXSpider was not started by the updater."
+                fi
 
                 # The update has succeeded; the fresh rollback copy is already
                 # available, so the old live tree is no longer needed.
+                # Restore optional web services that were running before update.
+                for web_service in "${WEB_STOPPED[@]}"; do
+                        systemctl start "$web_service" || die "Unable to restart $web_service"
+                done
                 UPDATE_FINISHED=1
                 # The installed tree and service are now committed. A cleanup
                 # failure must be reported, not silently presented as success.
@@ -1050,9 +1172,9 @@ welcome()
                 echo -e "                      DXSpider Updated"
                 echo -e "==============================================================="
                 echo ""
-                echo "NOTICE: If DXWeb and dxweb-admin services are installed,"
-                echo "        they have NOT been restarted by this updater."
-                echo "        Only the DXSpider service was restarted."
+                echo "NOTICE: DXWeb and dxweb-admin services, if previously active,"
+                echo "        have been restarted after successful update."
+                echo "        Inactive web services were left inactive."
                 echo -e " "
 
         elif [ "${OPTION}" == "R" ]; then
